@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn defaults_load_and_cover_every_action() {
         let keymap = Keymap::defaults();
-        for action in Action::ALL {
+        for &action in Action::ALL {
             assert!(
                 !keymap.chords_for(action).is_empty(),
                 "{action} has no default binding"

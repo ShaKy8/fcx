@@ -11,6 +11,7 @@ name = "fc"
 path = "src/main.rs"
 
 [dependencies]
+async-channel = "2.5.0"
 fc-core.workspace = true
 gtk.workspace = true
 
