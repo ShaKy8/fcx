@@ -2,9 +2,14 @@
 //!
 //! Listing runs on a worker thread; results are applied on the main thread only if
 //! no newer navigation started in the meantime (tracked by `generation`).
+//!
+//! Selection is Commander-style: the *cursor* is GTK's single selection (moved by
+//! arrows/mouse) and *marks* are a separate per-item flag. Actions operate on the
+//! marked items, or on the cursor item when nothing is marked.
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
@@ -16,7 +21,8 @@ use fc_core::sort::natural_cmp;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use crate::row::{Row, row_of};
+use crate::item::{Item, row_of};
+use crate::row::Row;
 
 /// Coalesces bursts of file-monitor events (e.g. an extracting archive) into one reload.
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -41,7 +47,7 @@ struct Inner {
 
 impl Pane {
     pub fn new() -> Self {
-        let store = gio::ListStore::new::<glib::BoxedAnyObject>();
+        let store = gio::ListStore::new::<Item>();
 
         let show_hidden = Rc::new(Cell::new(false));
         let filter = {
@@ -105,6 +111,7 @@ impl Pane {
         view.sort_by_column(Some(&name_col), gtk::SortType::Ascending);
 
         let path_entry = gtk::Entry::new();
+        path_entry.add_css_class("path-bar");
         let status = gtk::Label::builder()
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -113,12 +120,14 @@ impl Pane {
             .margin_top(2)
             .margin_bottom(2)
             .build();
+        status.add_css_class("status-bar");
         let scroller = gtk::ScrolledWindow::builder()
             .child(&view)
             .vexpand(true)
             .hexpand(true)
             .build();
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.add_css_class("pane");
         root.append(&path_entry);
         root.append(&scroller);
         root.append(&status);
@@ -147,6 +156,22 @@ impl Pane {
 
     pub fn focus(&self) {
         self.0.view.grab_focus();
+    }
+
+    /// Runs `f` whenever keyboard focus enters this pane (a click, Tab, etc.).
+    pub fn connect_focus_enter(&self, f: impl Fn() + 'static) {
+        let focus = gtk::EventControllerFocus::new();
+        focus.connect_enter(move |_| f());
+        self.0.root.add_controller(focus);
+    }
+
+    /// Visual "this is the active pane" state. Focus itself is separate.
+    pub fn set_active(&self, active: bool) {
+        if active {
+            self.0.root.add_css_class("active");
+        } else {
+            self.0.root.remove_css_class("active");
+        }
     }
 
     pub fn cwd(&self) -> Option<PathBuf> {
@@ -179,7 +204,9 @@ impl Pane {
     }
 
     pub fn go_up(&self) {
-        let Some(cwd) = self.cwd() else { return };
+        let Some(cwd) = self.cwd() else {
+            return;
+        };
         if let Some(parent) = cwd.parent() {
             self.navigate(
                 parent.to_path_buf(),
@@ -189,7 +216,7 @@ impl Pane {
     }
 
     pub fn toggle_hidden(&self) {
-        let keep = self.selected_name();
+        let keep = self.cursor_name();
         self.0.show_hidden.set(!self.0.show_hidden.get());
         self.0.filter.changed(gtk::FilterChange::Different);
         if let Some(name) = keep {
@@ -198,16 +225,95 @@ impl Pane {
         self.update_status();
     }
 
-    /// Re-list the current directory, keeping the cursor on the same name. If the
-    /// directory itself was deleted, fall back to the nearest surviving ancestor.
+    /// Re-list the current directory, keeping cursor and marks. If the directory
+    /// itself was deleted, fall back to the nearest surviving ancestor.
     pub fn reload(&self) {
-        let Some(cwd) = self.cwd() else { return };
+        let Some(cwd) = self.cwd() else {
+            return;
+        };
         match cwd.ancestors().find(|p| p.is_dir()) {
-            Some(dir) if dir == cwd => self.navigate(cwd, self.selected_name()),
+            Some(dir) if dir == cwd => self.navigate(cwd, self.cursor_name()),
             Some(dir) => self.navigate(dir.to_path_buf(), None),
             None => {}
         }
     }
+
+    pub fn focus_path_entry(&self) {
+        self.0.path_entry.grab_focus();
+        self.0.path_entry.select_region(0, -1);
+    }
+
+    // ---- marks -------------------------------------------------------------
+
+    pub fn toggle_mark(&self) {
+        if let Some(pos) = self.cursor() {
+            self.toggle_mark_at(pos);
+        }
+    }
+
+    /// Insert-style: toggle the cursor item, then step the cursor by `step` rows.
+    pub fn toggle_mark_and_step(&self, step: i32) {
+        let Some(pos) = self.cursor() else {
+            return;
+        };
+        self.toggle_mark_at(pos);
+        if let Some(next) = pos.checked_add_signed(step) {
+            self.select_pos(next);
+        }
+    }
+
+    pub fn mark_all(&self, marked: bool) {
+        for item in self.visible_items() {
+            if !item.row().is_parent {
+                item.set_marked(marked);
+            }
+        }
+        self.update_status();
+    }
+
+    pub fn invert_marks(&self) {
+        for item in self.visible_items() {
+            if !item.row().is_parent {
+                item.set_marked(!item.marked());
+            }
+        }
+        self.update_status();
+    }
+
+    /// Names that file operations should act on: the marked items, or the cursor
+    /// item if nothing is marked. Never includes `..`.
+    #[allow(dead_code)] // consumed by file operations (build step 4)
+    pub fn targets(&self) -> Vec<OsString> {
+        let marked: Vec<OsString> = self
+            .visible_items()
+            .filter(|item| item.marked())
+            .map(|item| item.row().entry.name.clone())
+            .collect();
+        if !marked.is_empty() {
+            return marked;
+        }
+        self.cursor()
+            .and_then(|pos| self.item_at(pos))
+            .filter(|item| !item.row().is_parent)
+            .map(|item| vec![item.row().entry.name.clone()])
+            .unwrap_or_default()
+    }
+
+    fn toggle_mark_at(&self, pos: u32) {
+        if let Some(item) = self.item_at(pos)
+            && !item.row().is_parent
+        {
+            item.set_marked(!item.marked());
+            self.update_status();
+        }
+    }
+
+    fn visible_items(&self) -> impl Iterator<Item = Item> + '_ {
+        let model = &self.0.selection;
+        (0..model.n_items()).filter_map(|i| model.item(i).and_downcast::<Item>())
+    }
+
+    // ---- internals ---------------------------------------------------------
 
     fn downgrade(&self) -> Weak<Inner> {
         Rc::downgrade(&self.0)
@@ -224,26 +330,6 @@ impl Pane {
                 pane.activate(pos);
             }
         });
-
-        let weak = self.downgrade();
-        let keys = gtk::EventControllerKey::new();
-        keys.connect_key_pressed(move |_, key, _, state| {
-            let Some(pane) = Pane::upgrade(&weak) else {
-                return glib::Propagation::Proceed;
-            };
-            let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
-            let alt = state.contains(gdk::ModifierType::ALT_MASK);
-            match key {
-                gdk::Key::BackSpace if !ctrl && !alt => pane.go_up(),
-                gdk::Key::Up if alt => pane.go_up(),
-                gdk::Key::h if ctrl => pane.toggle_hidden(),
-                gdk::Key::l if ctrl => pane.focus_path_entry(),
-                gdk::Key::r if ctrl => pane.reload(),
-                _ => return glib::Propagation::Proceed,
-            }
-            glib::Propagation::Stop
-        });
-        self.0.view.add_controller(keys);
 
         let weak = self.downgrade();
         self.0.path_entry.connect_activate(move |entry| {
@@ -272,24 +358,19 @@ impl Pane {
     }
 
     fn activate(&self, pos: u32) {
-        let Some(obj) = self.0.selection.item(pos) else {
+        let Some(item) = self.item_at(pos) else {
             return;
         };
-        let (is_parent, is_dir, name) = {
-            let row = row_of(&obj);
-            (
-                row.is_parent,
-                row.entry.is_dir_like(),
-                row.entry.name.clone(),
-            )
+        let row = item.row();
+        let Some(cwd) = self.cwd() else {
+            return;
         };
-        let Some(cwd) = self.cwd() else { return };
-        if is_parent {
+        if row.is_parent {
             self.go_up();
-        } else if is_dir {
-            self.navigate(cwd.join(name), None);
+        } else if row.entry.is_dir_like() {
+            self.navigate(cwd.join(&row.entry.name), None);
         } else {
-            self.open_file(&cwd.join(name));
+            self.open_file(&cwd.join(&row.entry.name));
         }
     }
 
@@ -305,11 +386,30 @@ impl Pane {
         let changed_dir = self.cwd().as_deref() != Some(path.as_path());
         let previous_pos = self.0.selection.selected();
 
+        // A reload of the same directory keeps marks; entering a new one starts clean.
+        let marked: HashSet<OsString> = if changed_dir {
+            HashSet::new()
+        } else {
+            self.0
+                .store
+                .iter::<Item>()
+                .flatten()
+                .filter(|item| item.marked())
+                .map(|item| item.row().entry.name.clone())
+                .collect()
+        };
+
         let mut objects = Vec::with_capacity(rows.len() + 1);
         if path.parent().is_some() {
-            objects.push(glib::BoxedAnyObject::new(Row::parent()));
+            objects.push(Item::new(Row::parent()));
         }
-        objects.extend(rows.into_iter().map(glib::BoxedAnyObject::new));
+        objects.extend(rows.into_iter().map(|row| {
+            let item = Item::new(row);
+            if marked.contains(&item.row().entry.name) {
+                item.set_marked(true);
+            }
+            item
+        }));
         self.0.store.splice(0, self.0.store.n_items(), &objects);
 
         *self.0.cwd.borrow_mut() = Some(path.clone());
@@ -363,18 +463,27 @@ impl Pane {
         *self.0.reload_timer.borrow_mut() = Some(id);
     }
 
-    fn selected_name(&self) -> Option<OsString> {
-        self.0
-            .selection
-            .selected_item()
-            .map(|obj| row_of(&obj).entry.name.clone())
+    fn cursor(&self) -> Option<u32> {
+        let pos = self.0.selection.selected();
+        (pos != gtk::INVALID_LIST_POSITION).then_some(pos)
+    }
+
+    fn item_at(&self, pos: u32) -> Option<Item> {
+        self.0.selection.item(pos).and_downcast::<Item>()
+    }
+
+    fn cursor_name(&self) -> Option<OsString> {
+        self.cursor()
+            .and_then(|pos| self.item_at(pos))
+            .map(|item| item.row().entry.name.clone())
     }
 
     /// Moves the cursor to the entry named `name`; returns false if it isn't visible.
     fn select_name(&self, name: &OsStr) -> bool {
-        let model = &self.0.selection;
-        let pos = (0..model.n_items())
-            .find(|&i| model.item(i).is_some_and(|obj| row_of(&obj).name() == name));
+        let pos = (0..self.0.selection.n_items()).find(|&i| {
+            self.item_at(i)
+                .is_some_and(|item| item.row().name() == name)
+        });
         if let Some(pos) = pos {
             self.select_pos(pos);
         }
@@ -391,11 +500,6 @@ impl Pane {
             gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
             None::<gtk::ScrollInfo>,
         );
-    }
-
-    fn focus_path_entry(&self) {
-        self.0.path_entry.grab_focus();
-        self.0.path_entry.select_region(0, -1);
     }
 
     fn sync_path_entry(&self) {
@@ -423,14 +527,19 @@ impl Pane {
 
     fn update_status(&self) {
         let (mut dirs, mut files, mut bytes, mut hidden) = (0u32, 0u32, 0u64, 0u32);
-        for obj in self.0.store.iter::<glib::Object>().flatten() {
-            let row = row_of(&obj);
+        let (mut marked, mut marked_bytes) = (0u32, 0u64);
+        for item in self.0.store.iter::<Item>().flatten() {
+            let row = item.row();
             if row.is_parent {
                 continue;
             }
             if row.entry.is_hidden() && !self.0.show_hidden.get() {
                 hidden += 1;
                 continue;
+            }
+            if item.marked() {
+                marked += 1;
+                marked_bytes += row.entry.size;
             }
             if row.entry.is_dir_like() {
                 dirs += 1;
@@ -439,7 +548,17 @@ impl Pane {
                 bytes += row.entry.size;
             }
         }
-        let mut text = format!("{dirs} folders, {files} files ({})", human_size(bytes));
+        let mut text = String::new();
+        if marked > 0 {
+            text.push_str(&format!(
+                "{marked} marked ({}) · ",
+                human_size(marked_bytes)
+            ));
+        }
+        text.push_str(&format!(
+            "{dirs} folders, {files} files ({})",
+            human_size(bytes)
+        ));
         if hidden > 0 {
             text.push_str(&format!(" · {hidden} hidden"));
         }
@@ -449,6 +568,34 @@ impl Pane {
 
 fn list_item(obj: &glib::Object) -> &gtk::ListItem {
     obj.downcast_ref().expect("factory items are ListItems")
+}
+
+/// Keeps `widget`'s CSS classes in sync with the bound item's `marked` flag:
+/// `base` classes always, plus `marked` while the item is marked. Done once at
+/// setup via an expression on the ListItem, so rebinding to another item is automatic.
+fn bind_marked_class(
+    item: &gtk::ListItem,
+    widget: &impl IsA<gtk::Widget>,
+    base: &'static [&'static str],
+) {
+    let item_expr = gtk::PropertyExpression::new(
+        gtk::ListItem::static_type(),
+        Some(&gtk::ConstantExpression::new(item)),
+        "item",
+    );
+    let marked_expr = gtk::PropertyExpression::new(Item::static_type(), Some(&item_expr), "marked");
+    let classes = gtk::ClosureExpression::new::<glib::StrV>(
+        [&marked_expr],
+        glib::closure!(move |_: Option<glib::Object>, marked: bool| {
+            let mut classes: Vec<&str> = base.to_vec();
+            if marked {
+                classes.push("marked");
+            }
+            glib::StrV::from(classes.as_slice())
+        }),
+    );
+    let widget = widget.upcast_ref::<gtk::Widget>();
+    classes.bind(widget, "css-classes", Some(widget));
 }
 
 fn add_column(
@@ -462,7 +609,7 @@ fn add_column(
     column.set_expand(expand);
     column.set_resizable(true);
     column.set_sorter(Some(&gtk::CustomSorter::new(move |a, b| {
-        cmp(&row_of(a), &row_of(b)).into()
+        cmp(row_of(a), row_of(b)).into()
     })));
     view.append_column(&column);
     column
@@ -471,9 +618,10 @@ fn add_column(
 fn text_factory(text: fn(&Row) -> String, xalign: f32) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(move |_, item| {
+        let item = list_item(item);
         let label = gtk::Label::builder().xalign(xalign).build();
-        label.add_css_class("numeric");
-        list_item(item).set_child(Some(&label));
+        bind_marked_class(item, &label, &["numeric"]);
+        item.set_child(Some(&label));
     });
     factory.connect_bind(move |_, item| {
         let item = list_item(item);
@@ -482,7 +630,7 @@ fn text_factory(text: fn(&Row) -> String, xalign: f32) -> gtk::SignalListItemFac
             .and_downcast::<gtk::Label>()
             .expect("label child");
         let obj = item.item().expect("bound item");
-        label.set_text(&text(&row_of(&obj)));
+        label.set_text(&text(row_of(&obj)));
     });
     factory
 }
@@ -490,6 +638,7 @@ fn text_factory(text: fn(&Row) -> String, xalign: f32) -> gtk::SignalListItemFac
 fn name_factory() -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(|_, item| {
+        let item = list_item(item);
         let icon = gtk::Image::new();
         let label = gtk::Label::builder()
             .xalign(0.0)
@@ -499,7 +648,8 @@ fn name_factory() -> gtk::SignalListItemFactory {
         let cell = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         cell.append(&icon);
         cell.append(&label);
-        list_item(item).set_child(Some(&cell));
+        bind_marked_class(item, &cell, &[]);
+        item.set_child(Some(&cell));
     });
     factory.connect_bind(|_, item| {
         let item = list_item(item);

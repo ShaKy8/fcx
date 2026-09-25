@@ -5,7 +5,6 @@ use std::ffi::OsStr;
 use fc_core::fs::{Entry, EntryKind};
 use fc_core::{format, sort};
 use gtk::glib;
-use gtk::prelude::*;
 
 pub struct Row {
     pub entry: Entry,
@@ -95,11 +94,4 @@ impl Row {
             }
         }
     }
-}
-
-/// Borrow the `Row` inside a list-model item.
-pub fn row_of(obj: &glib::Object) -> std::cell::Ref<'_, Row> {
-    obj.downcast_ref::<glib::BoxedAnyObject>()
-        .expect("list items are BoxedAnyObject")
-        .borrow::<Row>()
 }

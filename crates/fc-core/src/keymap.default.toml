@@ -1,0 +1,31 @@
+# Default fc keybindings. Copy to ~/.config/fc/keymap.toml and change what you like;
+# your file is layered over these defaults. Bind a chord to "none" to remove it.
+#
+# Chords are modifier names joined with "+", then a key name: Ctrl, Shift, Alt, Super.
+# Key names follow GDK (F5, Return, BackSpace, Page_Up, Insert, space, plus, minus,
+# asterisk, a..z). Names are case-insensitive. Shift is implied for shifted symbols,
+# so write "asterisk", not "Shift+8".
+
+[bindings]
+Tab = "switch-pane"
+"Shift+Tab" = "switch-pane"
+BackSpace = "go-up"
+"Alt+Up" = "go-up"
+"Ctrl+h" = "toggle-hidden"
+"Ctrl+l" = "focus-path"
+"Ctrl+r" = "reload"
+F5 = "reload"
+
+Insert = "mark-and-down"
+space = "toggle-mark"
+"Shift+Up" = "mark-up"
+"Shift+Down" = "mark-down"
+"Ctrl+a" = "mark-all"
+plus = "mark-all"
+minus = "unmark-all"
+asterisk = "invert-marks"
+
+"Ctrl+Right" = "mirror-path"
+"Ctrl+Left" = "mirror-path"
+"Ctrl+u" = "swap-panes"
+"Ctrl+q" = "quit"
