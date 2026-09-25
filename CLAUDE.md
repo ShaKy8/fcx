@@ -19,7 +19,7 @@ System deps: `rustup` (stable), plus `gtk4` (already installed on Omarchy).
 ## Architecture rules
 - **`crates/fc-core` never depends on GTK/glib/gio.** All filesystem, job, rename, search, compare, archive, and config logic goes here as plain Rust with `tempfile`-based tests. `crates/fc-gtk` is only UI wiring.
 - **The GTK main thread never touches the filesystem.** Listing, stat, copying, and searching run on worker threads and report back through glib channels. Target: stays responsive with 100k+ entry directories.
-- **All user-triggerable behavior goes through the named action registry** (`copy`, `move`, `rename`, …). Keys map to action names via `keymap.toml`; default bindings are Commander-style (F5 copy, F6 move, F7 mkdir, F8 trash, Shift+Del permanent delete, F2 rename, F3 view, Tab switch pane).
+- **All user-triggerable behavior goes through the named action registry** (`copy`, `move`, `rename`, …). Keys map to action names via `keymap.toml`. **Default bindings must match FreeCommander XE** (the user does not want to relearn them): look up FC's shortcut before assigning a key, and never reuse an FC chord for something else (e.g. Ctrl+Q is FC's quick view, not quit). The source of truth is `crates/fc-core/src/keymap.default.toml`.
 - **File operations are jobs:** plan (enumerate) then execute, streaming progress/conflict events, cancellable and pausable, with per-file error handling (skip/retry/abort) instead of whole-job failure.
 
 ## Filesystem invariants

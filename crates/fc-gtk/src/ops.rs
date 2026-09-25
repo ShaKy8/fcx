@@ -109,6 +109,7 @@ pub fn prompt(
 }
 
 /// Yes/no confirmation; `on_ok` runs only if the user picks `ok_label`.
+/// Enter confirms (focus starts on the confirm button), Escape cancels.
 pub fn confirm(
     parent: &gtk::Window,
     message: &str,
@@ -116,16 +117,15 @@ pub fn confirm(
     ok_label: &str,
     on_ok: impl FnOnce() + 'static,
 ) {
-    let dialog = gtk::AlertDialog::builder()
-        .message(message)
-        .detail(detail)
-        .buttons(["Cancel", ok_label])
-        .cancel_button(0)
-        .default_button(1)
-        .modal(true)
-        .build();
-    dialog.choose(Some(parent), gio::Cancellable::NONE, move |result| {
-        if result == Ok(1) {
+    let parent = parent.clone();
+    let (message, detail, ok_label) = (message.to_owned(), detail.to_owned(), ok_label.to_owned());
+    glib::spawn_future_local(async move {
+        let buttons = [
+            ("Cancel", false, None),
+            (ok_label.as_str(), true, Some("suggested-action")),
+        ];
+        if let Some((true, _)) = choose(&parent, &message, &message, &detail, "", 1, &buttons).await
+        {
             on_ok();
         }
     });
@@ -167,6 +167,7 @@ async fn choose<T: Copy + 'static>(
     message: &str,
     detail: &str,
     check_label: &str,
+    default: usize,
     buttons: &[(&str, T, Option<&str>)],
 ) -> Option<(T, bool)> {
     let window = gtk::Window::builder()
@@ -189,6 +190,7 @@ async fn choose<T: Copy + 'static>(
         .selectable(true)
         .build();
     let check = gtk::CheckButton::with_label(check_label);
+    check.set_visible(!check_label.is_empty());
 
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -196,6 +198,7 @@ async fn choose<T: Copy + 'static>(
         .halign(gtk::Align::End)
         .build();
     let (tx, rx) = async_channel::bounded::<(T, bool)>(1);
+    let mut widgets = Vec::new();
     for &(label, value, class) in buttons {
         let button = gtk::Button::with_label(label);
         if let Some(class) = class {
@@ -214,6 +217,7 @@ async fn choose<T: Copy + 'static>(
             }
         ));
         row.append(&button);
+        widgets.push(button);
     }
     drop(tx);
 
@@ -232,6 +236,9 @@ async fn choose<T: Copy + 'static>(
     window.set_child(Some(&content));
     close_on_escape(&window);
     window.present();
+    if let Some(button) = widgets.get(default) {
+        button.grab_focus();
+    }
 
     rx.recv().await.ok()
 }
@@ -318,9 +325,17 @@ pub async fn clipboard_take(widget: &impl IsA<gtk::Widget>) -> Option<(Vec<PathB
 
 // ---- trash ------------------------------------------------------------------
 
+/// One item the trash refused.
+pub struct TrashFailure {
+    pub path: PathBuf,
+    pub message: String,
+    /// GIO cannot trash on this mount (tmpfs, some removable media); permanent delete is the only option.
+    pub unsupported: bool,
+}
+
 /// Moves `paths` to the freedesktop trash (same one Nautilus uses) on a worker
 /// thread; `on_done` gets the failures.
-pub fn trash(paths: Vec<PathBuf>, on_done: impl FnOnce(Vec<(PathBuf, String)>) + 'static) {
+pub fn trash(paths: Vec<PathBuf>, on_done: impl FnOnce(Vec<TrashFailure>) + 'static) {
     glib::spawn_future_local(async move {
         let failures = gio::spawn_blocking(move || {
             paths
@@ -329,7 +344,11 @@ pub fn trash(paths: Vec<PathBuf>, on_done: impl FnOnce(Vec<(PathBuf, String)>) +
                     gio::File::for_path(&path)
                         .trash(gio::Cancellable::NONE)
                         .err()
-                        .map(|err| (path, err.to_string()))
+                        .map(|err| TrashFailure {
+                            path,
+                            unsupported: err.matches(gio::IOErrorEnum::NotSupported),
+                            message: err.to_string(),
+                        })
                 })
                 .collect::<Vec<_>>()
         })
@@ -624,6 +643,7 @@ impl JobRunner {
             &format!("“{name}” already exists in {folder}"),
             &detail,
             "Apply to all remaining conflicts",
+            1,
             &[
                 ("Abort", ConflictReply::Abort, None),
                 ("Skip", ConflictReply::Skip, None),
@@ -645,6 +665,7 @@ impl JobRunner {
             &format!("Cannot process {}", path.to_string_lossy()),
             message,
             "Skip all further errors",
+            2,
             &[
                 ("Abort", ErrorReply::Abort, None),
                 ("Skip", ErrorReply::Skip, None),

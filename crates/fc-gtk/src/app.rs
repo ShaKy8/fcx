@@ -333,22 +333,52 @@ impl App {
                         let Some(app) = weak.upgrade() else {
                             return;
                         };
-                        if !failures.is_empty() {
-                            let detail: Vec<String> = failures
-                                .iter()
-                                .map(|(p, e)| format!("{}: {e}", p.to_string_lossy()))
-                                .collect();
-                            ops::alert(
-                                app.win(),
-                                "Some items could not be trashed",
-                                &detail.join("\n"),
-                            );
-                        }
                         app.reload_all();
+                        app.after_trash(failures);
                     });
                 },
             );
         }
+    }
+
+    /// Items the trash refused: offer permanent deletion where trashing is
+    /// impossible on that mount, report anything else.
+    fn after_trash(&self, failures: Vec<ops::TrashFailure>) {
+        let (unsupported, other): (Vec<_>, Vec<_>) =
+            failures.into_iter().partition(|f| f.unsupported);
+        if !other.is_empty() {
+            let detail: Vec<String> = other
+                .iter()
+                .map(|f| format!("{}: {}", f.path.to_string_lossy(), f.message))
+                .collect();
+            ops::alert(
+                self.win(),
+                "Some items could not be trashed",
+                &detail.join("\n"),
+            );
+        }
+        if unsupported.is_empty() {
+            return;
+        }
+        let paths: Vec<PathBuf> = unsupported.into_iter().map(|f| f.path).collect();
+        let names: Vec<OsString> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap_or_default().to_os_string())
+            .collect();
+        let what = ops::describe(&names);
+        let weak = self.weak.clone();
+        ops::confirm(
+            self.win(),
+            &format!("Delete {what} permanently?"),
+            "This filesystem has no trash, so the items cannot be recovered later.",
+            "Delete",
+            move || {
+                if let Some(app) = weak.upgrade() {
+                    app.runner
+                        .enqueue(format!("Delete {what}"), JobSpec::delete(paths));
+                }
+            },
+        );
     }
 
     fn rename(&self) {
