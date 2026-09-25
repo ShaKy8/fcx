@@ -1,0 +1,18 @@
+[package]
+name = "fc-gtk"
+description = "GTK4 dual-pane file manager for Omarchy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "fc"
+path = "src/main.rs"
+
+[dependencies]
+fc-core.workspace = true
+gtk.workspace = true
+
+[lints]
+workspace = true
