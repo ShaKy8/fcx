@@ -3,6 +3,7 @@ mod chrome;
 mod favorites;
 mod host;
 mod item;
+mod multirename;
 mod ops;
 mod pane;
 mod props;

@@ -7,5 +7,6 @@ pub mod fs;
 pub mod glob;
 pub mod jobs;
 pub mod keymap;
+pub mod rename;
 pub mod sort;
 pub mod users;

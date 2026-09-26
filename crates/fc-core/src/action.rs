@@ -93,6 +93,8 @@ actions! {
     Delete => "delete", "Delete";
     DeletePermanent => "delete-permanent", "Delete permanently";
     Rename => "rename", "Rename…";
+    MultiRename => "multi-rename", "Multi rename…";
+    UndoRename => "undo-rename", "Undo last multi rename";
     // view
     ViewList => "view-list", "List view";
     ViewDetails => "view-details", "Details view";

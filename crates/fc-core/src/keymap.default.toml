@@ -13,7 +13,8 @@
 
 [bindings]
 # --- file operations (the F-key row) ---
-F2 = "rename"
+F2 = "rename"                  # with several items marked, opens the multi rename tool
+"Ctrl+m" = "multi-rename"
 F3 = "view"
 "Shift+F3" = "view"
 F4 = "edit"

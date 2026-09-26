@@ -31,6 +31,8 @@ const MENUS: &[(&str, &[&[Action]])] = &[
                 Action::Move,
                 Action::NewFolder,
                 Action::Rename,
+                Action::MultiRename,
+                Action::UndoRename,
             ],
             &[Action::Delete, Action::DeletePermanent],
             &[Action::Properties, Action::ChangeAttributes],

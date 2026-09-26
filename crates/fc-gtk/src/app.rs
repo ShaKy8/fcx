@@ -15,12 +15,14 @@ use fc_core::favorites::Favorites;
 use fc_core::glob::Mask;
 use fc_core::jobs::{JobSpec, Operation};
 use fc_core::keymap::{Chord, Keymap, Mods};
+use fc_core::rename::{self, Source};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::chrome::{self, FunctionsBar, PlacesBar};
 use crate::favorites;
 use crate::host::PaneHost;
+use crate::multirename;
 use crate::ops::{self, JobRunner};
 use crate::pane::{Pane, SortColumn, ViewMode, expand_path};
 use crate::props;
@@ -35,6 +37,8 @@ pub struct App {
     runner: JobRunner,
     favorites: RefCell<Favorites>,
     favorites_menu: gio::Menu,
+    /// Last multi rename, for undo.
+    last_rename: RefCell<Option<AppliedRename>>,
     split: gtk::Paned,
     menu_bar: gtk::PopoverMenuBar,
     toolbar: gtk::Box,
@@ -115,6 +119,7 @@ impl App {
                 menu_bar,
                 favorites_menu,
                 favorites: RefCell::new(Favorites::default()),
+                last_rename: RefCell::new(None),
                 toolbar: chrome::toolbar(&keymap, run.clone()),
                 places,
                 functions: FunctionsBar::new(keymap.clone(), run),
@@ -301,6 +306,8 @@ impl App {
             Action::Delete => self.delete(false),
             Action::DeletePermanent => self.delete(true),
             Action::Rename => self.rename(),
+            Action::MultiRename => self.multi_rename(),
+            Action::UndoRename => self.undo_rename(),
             Action::ToggleSplitOrientation => {
                 let flipped = match self.split.orientation() {
                     gtk::Orientation::Horizontal => gtk::Orientation::Vertical,
@@ -723,6 +730,11 @@ impl App {
 
     fn rename(&self) {
         let pane = self.active_pane();
+        // FC: F2 with several items selected is the multi rename tool.
+        if pane.marked_names().len() > 1 {
+            self.multi_rename();
+            return;
+        }
         let (Some(cwd), Some(name)) = (pane.cwd(), pane.cursor_name()) else {
             return;
         };
@@ -769,6 +781,61 @@ impl App {
                 }
             },
         );
+    }
+
+    fn multi_rename(&self) {
+        let pane = self.active_pane();
+        let Some(cwd) = pane.cwd() else {
+            return;
+        };
+        let parent_name = cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let sources: Vec<Source> = pane
+            .targets()
+            .into_iter()
+            .map(|name| {
+                let meta = fs::symlink_metadata(cwd.join(&name)).ok();
+                Source {
+                    is_dir: cwd.join(&name).is_dir(),
+                    modified: meta.and_then(|m| m.modified().ok()),
+                    parent_name: parent_name.clone(),
+                    name,
+                }
+            })
+            .collect();
+        if sources.is_empty() {
+            return;
+        }
+        let weak = self.weak.clone();
+        let dir = cwd.clone();
+        multirename::show(self.win(), cwd, sources, move |applied| {
+            if let Some(app) = weak.upgrade() {
+                *app.last_rename.borrow_mut() = Some((dir.clone(), applied));
+                app.active_pane().mark_all(false);
+                app.reload_all();
+            }
+        });
+    }
+
+    fn undo_rename(&self) {
+        let Some((dir, applied)) = self.last_rename.borrow_mut().take() else {
+            ops::alert(
+                self.win(),
+                "Nothing to undo",
+                "No multi rename has been done yet.",
+            );
+            return;
+        };
+        match rename::execute(&dir, &rename::undo_plan(&applied)) {
+            Ok(_) => self.reload_all(),
+            Err(err) => {
+                // Keep it so the user can retry after fixing the cause.
+                *self.last_rename.borrow_mut() = Some((dir, applied));
+                ops::alert(self.win(), "Undo failed", &err.to_string());
+            }
+        }
     }
 
     fn create(&self, folder: bool) {
@@ -880,6 +947,9 @@ impl App {
         });
     }
 }
+
+/// The folder and the `(old, new)` pairs a multi rename applied.
+type AppliedRename = (PathBuf, Vec<(OsString, String)>);
 
 #[derive(Clone, Copy)]
 enum PathText {
