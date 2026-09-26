@@ -361,17 +361,9 @@ impl FunctionsBar {
     }
 
     /// Relabel for the modifiers now held (called on modifier press/release).
+    /// The whole row changes at once, so the buttons say only `F<n>`; the
+    /// action names tell which modifier is down.
     pub fn set_mods(&self, mods: Mods) {
-        let mut prefix = String::new();
-        if mods.ctrl {
-            prefix.push_str("Ctrl+");
-        }
-        if mods.alt {
-            prefix.push_str("Alt+");
-        }
-        if mods.shift {
-            prefix.push_str("Shift+");
-        }
         let mut current = self.current.borrow_mut();
         for (i, button) in self.buttons.iter().enumerate() {
             let chord = Chord::new(&format!("f{}", i + 1), mods);
@@ -381,7 +373,7 @@ impl FunctionsBar {
                 .child()
                 .and_downcast::<gtk::Label>()
                 .expect("label child");
-            let key = glib::markup_escape_text(&format!("{prefix}F{}", i + 1));
+            let key = glib::markup_escape_text(&format!("F{}", i + 1));
             match action {
                 Some(action) => {
                     let text = glib::markup_escape_text(action.label().trim_end_matches('…'));
