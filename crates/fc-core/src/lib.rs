@@ -8,5 +8,6 @@ pub mod glob;
 pub mod jobs;
 pub mod keymap;
 pub mod rename;
+pub mod search;
 pub mod sort;
 pub mod users;

@@ -36,7 +36,7 @@ const MENUS: &[(&str, &[&[Action]])] = &[
             ],
             &[Action::Delete, Action::DeletePermanent],
             &[Action::Properties, Action::ChangeAttributes],
-            &[Action::OpenTerminal],
+            &[Action::Search, Action::OpenTerminal],
             &[Action::Quit],
         ],
     ),
@@ -93,7 +93,11 @@ const MENUS: &[(&str, &[&[Action]])] = &[
         "_View",
         &[
             &[Action::Reload, Action::ReloadAll],
-            &[Action::ToggleHidden, Action::ToggleTree],
+            &[
+                Action::ToggleHidden,
+                Action::QuickFilter,
+                Action::ToggleTree,
+            ],
             &[
                 Action::ViewDetails,
                 Action::ViewList,
@@ -132,6 +136,7 @@ const TOOLBAR: &[&[(Action, &str)]] = &[
         (Action::Delete, "user-trash-symbolic"),
     ],
     &[
+        (Action::Search, "system-search-symbolic"),
         (Action::ToggleHidden, "view-reveal-symbolic"),
         (Action::SameFolderBoth, "view-dual-symbolic"),
         (Action::SwapPanes, "object-flip-horizontal-symbolic"),

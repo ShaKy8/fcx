@@ -26,6 +26,7 @@ use crate::multirename;
 use crate::ops::{self, JobRunner};
 use crate::pane::{Pane, SortColumn, ViewMode, expand_path};
 use crate::props;
+use crate::search;
 
 pub struct App {
     weak: Weak<App>,
@@ -264,6 +265,8 @@ impl App {
             Action::EditFavorites => self.edit_favorites(),
             Action::FavoritesMenu => favorites::popup(&pane.view_widget(), &self.favorites_menu),
             Action::OpenTerminal => self.open_terminal(),
+            Action::Search => self.search(),
+            Action::QuickFilter => pane.toggle_quick_filter(),
             Action::ToggleTree => pane.toggle_tree(),
             Action::CalcSize => pane.calc_sizes(false),
             Action::CalcSizeAll => pane.calc_sizes(true),
@@ -495,6 +498,17 @@ impl App {
         props::show(self.win(), path, attributes, move || {
             if let Some(app) = weak.upgrade() {
                 app.reload_all();
+            }
+        });
+    }
+
+    fn search(&self) {
+        let start = self.active_pane().cwd().unwrap_or_else(glib::home_dir);
+        let weak = self.weak.clone();
+        search::show(self.win(), start, move |dir, name| {
+            if let Some(app) = weak.upgrade() {
+                app.active_pane().navigate(dir, Some(name));
+                app.window.present();
             }
         });
     }

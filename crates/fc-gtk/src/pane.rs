@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use fc_core::format::human_size;
 use fc_core::fs::list_dir;
+use fc_core::glob::Mask;
 use fc_core::jobs::{Operation, count};
 use fc_core::sort::{name_key, natural_cmp};
 use gtk::prelude::*;
@@ -68,6 +69,8 @@ struct Columns {
 struct Inner {
     root: gtk::Box,
     path_entry: gtk::Entry,
+    filter_entry: gtk::Entry,
+    quick_mask: Rc<RefCell<Option<Mask>>>,
     view: gtk::ColumnView,
     grid: gtk::GridView,
     stack: gtk::Stack,
@@ -102,11 +105,22 @@ impl Pane {
 
             let show_hidden = Rc::new(Cell::new(false));
             let view_mode = Rc::new(Cell::new(ViewMode::Details));
+            let quick_mask: Rc<RefCell<Option<Mask>>> = Rc::new(RefCell::new(None));
             let filter = {
                 let show_hidden = show_hidden.clone();
+                let quick_mask = quick_mask.clone();
                 gtk::CustomFilter::new(move |obj| {
                     let row = row_of(obj);
-                    show_hidden.get() || row.is_parent || !row.entry.is_hidden()
+                    if row.is_parent {
+                        return true;
+                    }
+                    if !show_hidden.get() && row.entry.is_hidden() {
+                        return false;
+                    }
+                    quick_mask
+                        .borrow()
+                        .as_ref()
+                        .is_none_or(|mask| mask.matches(&row.display_name))
                 })
             };
             let filtered = gtk::FilterListModel::new(Some(store.clone()), Some(filter.clone()));
@@ -217,6 +231,15 @@ impl Pane {
 
             let path_entry = gtk::Entry::new();
             path_entry.add_css_class("path-bar");
+            let filter_entry = gtk::Entry::builder()
+                .placeholder_text("Quick filter: *.jpg; *.png or part of a name  (Esc clears)")
+                .visible(false)
+                .build();
+            filter_entry.add_css_class("quick-filter");
+            filter_entry.set_icon_from_icon_name(
+                gtk::EntryIconPosition::Primary,
+                Some("edit-find-symbolic"),
+            );
             let status = gtk::Label::builder()
                 .xalign(0.0)
                 .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -229,12 +252,15 @@ impl Pane {
             let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
             root.add_css_class("pane");
             root.append(&path_entry);
+            root.append(&filter_entry);
             root.append(&split);
             root.append(&status);
 
             Inner {
                 root,
                 path_entry,
+                filter_entry,
+                quick_mask,
                 view,
                 grid,
                 stack,
@@ -475,6 +501,37 @@ impl Pane {
             Some(dir) => self.navigate(dir.to_path_buf(), None),
             None => {}
         }
+    }
+
+    /// Ctrl+Y: show the filter bar (focused), or hide it and drop the filter.
+    pub fn toggle_quick_filter(&self) {
+        let entry = &self.0.filter_entry;
+        if WidgetExt::is_visible(entry) {
+            self.clear_quick_filter();
+        } else {
+            entry.set_visible(true);
+            entry.grab_focus();
+        }
+    }
+
+    fn clear_quick_filter(&self) {
+        let entry = &self.0.filter_entry;
+        entry.set_text("");
+        entry.set_visible(false);
+        self.apply_quick_filter();
+        self.focus();
+    }
+
+    fn apply_quick_filter(&self) {
+        let keep = self.cursor_name();
+        let text = self.0.filter_entry.text();
+        let mask = (!text.trim().is_empty()).then(|| Mask::parse(&text));
+        *self.0.quick_mask.borrow_mut() = mask.filter(|m| !m.is_empty());
+        self.0.filter.changed(gtk::FilterChange::Different);
+        if let Some(name) = keep {
+            self.select_name(&name);
+        }
+        self.update_status();
     }
 
     pub fn focus_path_entry(&self) {
@@ -787,6 +844,32 @@ impl Pane {
             glib::Propagation::Stop
         });
         self.0.path_entry.add_controller(keys);
+
+        let weak = self.downgrade();
+        self.0.filter_entry.connect_changed(move |_| {
+            if let Some(pane) = Pane::upgrade(&weak) {
+                pane.apply_quick_filter();
+            }
+        });
+        let weak = self.downgrade();
+        self.0.filter_entry.connect_activate(move |_| {
+            if let Some(pane) = Pane::upgrade(&weak) {
+                pane.focus();
+            }
+        });
+        let weak = self.downgrade();
+        let keys = gtk::EventControllerKey::new();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            let Some(pane) = Pane::upgrade(&weak) else {
+                return glib::Propagation::Proceed;
+            };
+            if key != gdk::Key::Escape {
+                return glib::Propagation::Proceed;
+            }
+            pane.clear_quick_filter();
+            glib::Propagation::Stop
+        });
+        self.0.filter_entry.add_controller(keys);
 
         for view in [
             self.0.view.clone().upcast::<gtk::Widget>(),
@@ -1128,6 +1211,10 @@ impl Pane {
         ));
         if hidden > 0 {
             text.push_str(&format!(" · {hidden} hidden"));
+        }
+        if self.0.quick_mask.borrow().is_some() {
+            let shown = self.0.selection.n_items().saturating_sub(1);
+            text = format!("filter: {shown} of {} shown · {text}", dirs + files);
         }
         self.0.status.set_text(&text);
     }

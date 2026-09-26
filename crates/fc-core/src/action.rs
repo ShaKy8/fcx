@@ -38,6 +38,8 @@ actions! {
     SameFolderBoth => "same-folder-both", "Same folder in both panes";
     SwapPanes => "swap-panes", "Swap panes";
     OpenTerminal => "open-terminal", "Open terminal here";
+    Search => "search", "Search…";
+    QuickFilter => "quick-filter", "Quick filter";
     // tabs
     NewTab => "new-tab", "New tab";
     CloseTab => "close-tab", "Close tab";
