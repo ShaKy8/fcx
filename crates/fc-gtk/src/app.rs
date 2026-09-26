@@ -1,20 +1,23 @@
-//! The main window: two panes side by side, an active-pane pointer, the jobs
-//! panel, and the key → chord → action dispatcher. Every keyboard feature goes
-//! through [`App::run`], so menus and a command palette can reuse it later.
+//! The main window: chrome (menu, toolbar, places, functions bar), two panes,
+//! the jobs panel, and the key → chord → action dispatcher. Every feature goes
+//! through [`App::run`], which menus, toolbar, and the functions bar share.
 
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::rc::{Rc, Weak};
 
 use fc_core::action::Action;
+use fc_core::glob::Mask;
 use fc_core::jobs::{JobSpec, Operation};
 use fc_core::keymap::{Chord, Keymap, Mods};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
+use crate::chrome::{self, FunctionsBar, PlacesBar};
 use crate::ops::{self, JobRunner};
 use crate::pane::{Pane, SortColumn, expand_path};
 
@@ -25,6 +28,11 @@ pub struct App {
     active: Cell<usize>,
     keymap: Keymap,
     runner: JobRunner,
+    split: gtk::Paned,
+    menu_bar: gtk::PopoverMenuBar,
+    toolbar: gtk::Box,
+    places: Rc<PlacesBar>,
+    functions: Rc<FunctionsBar>,
 }
 
 impl App {
@@ -40,28 +48,58 @@ impl App {
             .shrink_end_child(false)
             .vexpand(true)
             .build();
+        // No explicit position: with both children resizable GTK splits the width evenly.
 
         let window = gtk::ApplicationWindow::builder()
             .application(gtk_app)
             .title("fc")
             .default_width(1200)
             .default_height(760)
+            .show_menubar(false)
             .build();
         let runner = JobRunner::new(window.upcast_ref());
-        let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        layout.append(&split);
-        layout.append(runner.widget());
-        window.set_child(Some(&layout));
-        // No explicit position: with both children resizable GTK splits the width evenly.
 
-        let app = Rc::new_cyclic(|weak: &Weak<App>| App {
-            weak: weak.clone(),
-            window,
-            panes,
-            active: Cell::new(0),
-            keymap,
-            runner,
+        let app = Rc::new_cyclic(|weak: &Weak<App>| {
+            let run: chrome::Run = {
+                let weak = weak.clone();
+                Rc::new(move |action| {
+                    if let Some(app) = weak.upgrade() {
+                        app.run(action);
+                    }
+                })
+            };
+            chrome::register_actions(gtk_app, &keymap, run.clone());
+            let places = {
+                let weak = weak.clone();
+                PlacesBar::new(window.upcast_ref(), move |path| {
+                    if let Some(app) = weak.upgrade() {
+                        app.active_pane().navigate(path, None);
+                    }
+                })
+            };
+            App {
+                weak: weak.clone(),
+                menu_bar: chrome::menu_bar(),
+                toolbar: chrome::toolbar(&keymap, run.clone()),
+                places,
+                functions: FunctionsBar::new(keymap.clone(), run),
+                window,
+                panes,
+                active: Cell::new(0),
+                keymap,
+                runner,
+                split,
+            }
         });
+
+        let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        layout.append(&app.menu_bar);
+        layout.append(&app.toolbar);
+        layout.append(app.places.widget());
+        layout.append(&app.split);
+        layout.append(app.runner.widget());
+        layout.append(app.functions.widget());
+        app.window.set_child(Some(&layout));
 
         for (i, pane) in app.panes.iter().enumerate() {
             let weak = app.weak.clone();
@@ -91,7 +129,14 @@ impl App {
             let Some(app) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            app.functions.set_mods(mods_after(key, state, true));
             app.on_key(key, state)
+        });
+        let weak = app.weak.clone();
+        keys.connect_key_released(move |_, key, _, state| {
+            if let Some(app) = weak.upgrade() {
+                app.functions.set_mods(mods_after(key, state, false));
+            }
         });
         app.window.add_controller(keys);
 
@@ -128,23 +173,39 @@ impl App {
             Action::GoRoot => pane.go_root(),
             Action::Back => pane.back(),
             Action::Forward => pane.forward(),
-            Action::FocusPath => pane.focus_path_entry(),
+            Action::GoToFolder => pane.focus_path_entry(),
             Action::Reload => pane.reload(),
+            Action::ReloadAll => self.reload_all(),
             Action::ToggleHidden => pane.toggle_hidden(),
-            Action::OpenInLeft => self.open_in(0),
-            Action::OpenInRight => self.open_in(1),
+            Action::SameFolderBoth => {
+                if let Some(cwd) = pane.cwd() {
+                    self.other_pane().navigate(cwd, None);
+                }
+            }
             Action::SwapPanes => {
                 if let (Some(a), Some(b)) = (self.panes[0].cwd(), self.panes[1].cwd()) {
                     self.panes[0].navigate(b, None);
                     self.panes[1].navigate(a, None);
                 }
             }
+            Action::OpenTerminal => self.open_terminal(),
             Action::ToggleMark => pane.toggle_mark(),
             Action::MarkAndDown | Action::MarkDown => pane.toggle_mark_and_step(1),
             Action::MarkUp => pane.toggle_mark_and_step(-1),
             Action::MarkAll => pane.mark_all(true),
             Action::UnmarkAll => pane.mark_all(false),
-            Action::InvertMarks => pane.invert_marks(),
+            Action::MarkPattern => self.mark_pattern(true),
+            Action::UnmarkPattern => self.mark_pattern(false),
+            Action::MarkSameExt => pane.mark_same_ext(true),
+            Action::UnmarkSameExt => pane.mark_same_ext(false),
+            Action::InvertMarks => pane.invert_marks(false),
+            Action::InvertFileMarks => pane.invert_marks(true),
+            Action::ClipboardCopy => self.clipboard_put(false),
+            Action::ClipboardCut => self.clipboard_put(true),
+            Action::ClipboardPaste => self.clipboard_paste(),
+            Action::CopyFullPaths => self.copy_text(PathText::Full),
+            Action::CopyNames => self.copy_text(PathText::Names),
+            Action::CopyFolderPath => self.copy_text(PathText::Folder),
             Action::SortByName => pane.sort_by(SortColumn::Name),
             Action::SortByExt => pane.sort_by(SortColumn::Ext),
             Action::SortBySize => pane.sort_by(SortColumn::Size),
@@ -158,9 +219,29 @@ impl App {
             Action::Delete => self.delete(false),
             Action::DeletePermanent => self.delete(true),
             Action::Rename => self.rename(),
-            Action::ClipboardCopy => self.clipboard_put(false),
-            Action::ClipboardCut => self.clipboard_put(true),
-            Action::ClipboardPaste => self.clipboard_paste(),
+            Action::ToggleSplitOrientation => {
+                let flipped = match self.split.orientation() {
+                    gtk::Orientation::Horizontal => gtk::Orientation::Vertical,
+                    _ => gtk::Orientation::Horizontal,
+                };
+                self.split.set_orientation(flipped);
+            }
+            Action::ToggleSinglePane => {
+                let other = self.other_pane().widget();
+                other.set_visible(!other.is_visible());
+            }
+            Action::ToggleFullscreen => {
+                if self.window.is_fullscreen() {
+                    self.window.unfullscreen();
+                } else {
+                    self.window.fullscreen();
+                }
+            }
+            Action::ToggleMenuBar => toggle(&self.menu_bar),
+            Action::ToggleToolbar => toggle(&self.toolbar),
+            Action::TogglePlacesBar => toggle(self.places.widget()),
+            Action::ToggleFunctionsBar => toggle(self.functions.widget()),
+            Action::ShowShortcuts => chrome::shortcuts_window(self.win(), &self.keymap),
             Action::Quit => self.window.close(),
         }
     }
@@ -207,17 +288,72 @@ impl App {
         Some((cwd, names, paths))
     }
 
-    /// Ctrl+Left/Right: show the folder under the cursor (or the current one) in pane `index`.
-    fn open_in(&self, index: usize) {
+    fn open_terminal(&self) {
+        let Some(cwd) = self.active_pane().cwd() else {
+            return;
+        };
+        // Omarchy's own launcher does exactly this; fall back to the XDG spec tool.
+        let dir = format!("--dir={}", cwd.to_string_lossy());
+        let mut command = if which("uwsm-app") {
+            let mut c = Command::new("setsid");
+            c.args(["uwsm-app", "--", "xdg-terminal-exec", &dir]);
+            c
+        } else {
+            let mut c = Command::new("xdg-terminal-exec");
+            c.arg(&dir);
+            c
+        };
+        if let Err(err) = command.current_dir(&cwd).spawn() {
+            ops::alert(self.win(), "Cannot open a terminal", &err.to_string());
+        }
+    }
+
+    fn mark_pattern(&self, marked: bool) {
+        let weak = self.weak.clone();
+        let (title, message) = if marked {
+            ("Select", "Select files matching:")
+        } else {
+            ("Deselect", "Deselect files matching:")
+        };
+        ops::prompt(
+            self.win(),
+            title,
+            message,
+            "*",
+            Some((0, -1)),
+            title,
+            move |text| {
+                let mask = Mask::parse(&text);
+                if let Some(app) = weak.upgrade()
+                    && !mask.is_empty()
+                {
+                    app.active_pane().mark_matching(&mask, marked);
+                }
+            },
+        );
+    }
+
+    fn copy_text(&self, what: PathText) {
         let pane = self.active_pane();
         let Some(cwd) = pane.cwd() else {
             return;
         };
-        let folder = match pane.cursor_name() {
-            Some(name) if cwd.join(&name).is_dir() => cwd.join(name),
-            _ => cwd,
+        let lines: Vec<String> = match what {
+            PathText::Folder => vec![cwd.to_string_lossy().into_owned()],
+            PathText::Names => pane
+                .targets()
+                .iter()
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect(),
+            PathText::Full => pane
+                .targets()
+                .iter()
+                .map(|n| cwd.join(n).to_string_lossy().into_owned())
+                .collect(),
         };
-        self.panes[index].navigate(folder, None);
+        if !lines.is_empty() {
+            self.window.clipboard().set_text(&lines.join("\n"));
+        }
     }
 
     // ---- file operations ---------------------------------------------------
@@ -541,11 +677,47 @@ impl App {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PathText {
+    Full,
+    Names,
+    Folder,
+}
+
+fn toggle(widget: &impl IsA<gtk::Widget>) {
+    widget.set_visible(!widget.is_visible());
+}
+
+fn which(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+}
+
 fn same_device(a: &Path, b: &Path) -> bool {
     match (fs::metadata(a), fs::metadata(b)) {
         (Ok(a), Ok(b)) => a.dev() == b.dev(),
         _ => false,
     }
+}
+
+/// Modifiers in effect after this key event. GDK's `state` describes the
+/// moment *before* the event, so a modifier key being pressed or released has
+/// to be folded in by hand; this keeps the functions bar labels in sync.
+fn mods_after(key: gdk::Key, state: gdk::ModifierType, pressed: bool) -> Mods {
+    let mut mods = Mods {
+        ctrl: state.contains(gdk::ModifierType::CONTROL_MASK),
+        shift: state.contains(gdk::ModifierType::SHIFT_MASK),
+        alt: state.contains(gdk::ModifierType::ALT_MASK),
+        super_: state.contains(gdk::ModifierType::SUPER_MASK),
+    };
+    match key {
+        gdk::Key::Control_L | gdk::Key::Control_R => mods.ctrl = pressed,
+        gdk::Key::Shift_L | gdk::Key::Shift_R => mods.shift = pressed,
+        gdk::Key::Alt_L | gdk::Key::Alt_R => mods.alt = pressed,
+        gdk::Key::Super_L | gdk::Key::Super_R => mods.super_ = pressed,
+        _ => {}
+    }
+    mods
 }
 
 /// Translate a GDK key event into a keymap chord.

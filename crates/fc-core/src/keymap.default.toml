@@ -1,62 +1,80 @@
-# Default fc keybindings, following FreeCommander XE. Copy to
+# Default fc keybindings, following FreeCommander XE's defaults
+# (https://freecommander.com/fchelpxe/en/Keyboardshortcuts.html). Copy to
 # ~/.config/fc/keymap.toml and change what you like; your file is layered over
 # these defaults. Bind a chord to "none" to remove it.
 #
 # Chords are modifier names joined with "+", then a key name: Ctrl, Shift, Alt, Super.
 # Key names follow GDK (F5, Return, BackSpace, Page_Up, Insert, space, plus, minus,
-# asterisk, backslash, a..z). Names are case-insensitive. Shift is implied for
-# shifted symbols, so write "asterisk", not "Shift+8".
+# asterisk, a..z). Names are case-insensitive; keypad keys map onto their plain
+# names (KP_Add = plus). Shift is implied for shifted symbols, so write
+# "asterisk", not "Shift+8".
+#
+# Where FreeCommander has no default, fc adds one and says so.
 
 [bindings]
 # --- file operations (the F-key row) ---
 F2 = "rename"
 F3 = "view"
+"Shift+F3" = "view"
 F4 = "edit"
 "Shift+F4" = "new-file"
 F5 = "copy"
 F6 = "move"
 F7 = "new-folder"
-F8 = "delete"
+F8 = "delete"                  # functions-bar convention; FC's list has Del only
 Delete = "delete"
-"Shift+F8" = "delete-permanent"
 "Shift+Delete" = "delete-permanent"
 
 # --- clipboard ---
 "Ctrl+c" = "clipboard-copy"
 "Ctrl+x" = "clipboard-cut"
 "Ctrl+v" = "clipboard-paste"
+"Alt+Insert" = "copy-full-paths"
+"Shift+Alt+Insert" = "copy-names"
+"Ctrl+Alt+Insert" = "copy-folder-path"
 
-# --- panes & navigation ---
-Tab = "switch-pane"
-"Shift+Tab" = "switch-pane"
-BackSpace = "go-up"
-"Alt+Up" = "go-up"
-"Ctrl+BackSpace" = "go-root"
-"Ctrl+backslash" = "go-root"
-"Alt+Left" = "back"
-"Alt+Right" = "forward"
-"Ctrl+l" = "focus-path"
-"Ctrl+r" = "reload"
-"Ctrl+h" = "toggle-hidden"
-"Ctrl+Left" = "open-in-left"
-"Ctrl+Right" = "open-in-right"
-"Ctrl+u" = "swap-panes"
-
-# --- marks ---
+# --- selection ---
 Insert = "mark-and-down"
 space = "toggle-mark"
 "Shift+Up" = "mark-up"
 "Shift+Down" = "mark-down"
 "Ctrl+a" = "mark-all"
-plus = "mark-all"
-minus = "unmark-all"
+plus = "mark-pattern"
+minus = "unmark-pattern"
+"Ctrl+minus" = "unmark-all"
+"Alt+plus" = "mark-same-ext"
+"Alt+minus" = "unmark-same-ext"
 asterisk = "invert-marks"
+"Ctrl+asterisk" = "invert-file-marks"
+
+# --- folders & panes ---
+Tab = "switch-pane"
+"Shift+Tab" = "switch-pane"
+BackSpace = "go-up"
+"Ctrl+Home" = "go-root"
+"Alt+Left" = "back"
+"Alt+Right" = "forward"
+"Alt+g" = "go-to-folder"
+"Ctrl+l" = "go-to-folder"      # fc extra: the usual GTK/Nautilus key
+"Ctrl+r" = "reload"
+"Shift+Ctrl+r" = "reload-all"
+"Ctrl+e" = "same-folder-both"
+"Ctrl+u" = "swap-panes"
+"Ctrl+d" = "open-terminal"
 
 # --- sorting ---
 "Ctrl+F3" = "sort-by-name"
-"Ctrl+F4" = "sort-by-ext"
+"Ctrl+F4" = "sort-by-ext"      # FC: "by type"; fc has no type column, so by extension
+"Shift+Ctrl+F4" = "sort-by-ext"
 "Ctrl+F5" = "sort-by-date"
 "Ctrl+F6" = "sort-by-size"
 
+# --- view ---
+"Alt+h" = "toggle-hidden"      # fc extra: FC has no default key for hidden files
+"Ctrl+h" = "toggle-split-orientation"
+F10 = "toggle-single-pane"
+F11 = "toggle-fullscreen"
+
 # --- app ---
+F1 = "show-shortcuts"
 "Alt+F4" = "quit"

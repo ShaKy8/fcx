@@ -380,10 +380,42 @@ impl Pane {
         self.update_status();
     }
 
-    pub fn invert_marks(&self) {
+    /// Flip every mark; with `files_only`, folders keep theirs (FC's Ctrl+Num*).
+    pub fn invert_marks(&self, files_only: bool) {
         for item in self.visible_items() {
-            if !item.row().is_parent {
+            let row = item.row();
+            if !row.is_parent && !(files_only && row.entry.is_dir_like()) {
                 item.set_marked(!item.marked());
+            }
+        }
+        self.update_status();
+    }
+
+    /// Mark or unmark every visible entry whose name matches `mask`.
+    pub fn mark_matching(&self, mask: &fc_core::glob::Mask, marked: bool) {
+        for item in self.visible_items() {
+            let row = item.row();
+            if !row.is_parent && mask.matches(&row.display_name) {
+                item.set_marked(marked);
+            }
+        }
+        self.update_status();
+    }
+
+    /// Mark or unmark every file sharing the cursor item's extension.
+    pub fn mark_same_ext(&self, marked: bool) {
+        let Some(ext) = self
+            .cursor()
+            .and_then(|pos| self.item_at(pos))
+            .filter(|item| !item.row().is_parent && !item.row().entry.is_dir_like())
+            .map(|item| item.row().ext_key.clone())
+        else {
+            return;
+        };
+        for item in self.visible_items() {
+            let row = item.row();
+            if !row.is_parent && !row.entry.is_dir_like() && row.ext_key == ext {
+                item.set_marked(marked);
             }
         }
         self.update_status();

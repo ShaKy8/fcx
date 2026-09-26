@@ -1,4 +1,5 @@
-//! Named actions. Everything a key, menu entry, or command palette can trigger is one of these.
+//! Named actions. Everything a key, menu entry, toolbar button, or the
+//! functions bar can trigger is one of these.
 
 use std::fmt;
 use std::str::FromStr;
@@ -11,7 +12,7 @@ macro_rules! actions {
         impl Action {
             pub const ALL: &'static [Action] = &[$(Action::$variant,)*];
 
-            /// Stable kebab-case identifier used in keymap files.
+            /// Stable kebab-case identifier used in keymap files and GActions.
             pub fn id(self) -> &'static str {
                 match self { $(Action::$variant => $id,)* }
             }
@@ -26,24 +27,37 @@ macro_rules! actions {
 actions! {
     // panes & navigation
     SwitchPane => "switch-pane", "Switch pane";
-    GoUp => "go-up", "Go to parent folder";
-    GoRoot => "go-root", "Go to root folder";
-    Back => "back", "Back in history";
-    Forward => "forward", "Forward in history";
-    FocusPath => "focus-path", "Edit path";
-    Reload => "reload", "Reload";
-    ToggleHidden => "toggle-hidden", "Show/hide hidden files";
-    OpenInLeft => "open-in-left", "Open folder in left pane";
-    OpenInRight => "open-in-right", "Open folder in right pane";
+    GoUp => "go-up", "Parent folder";
+    GoRoot => "go-root", "Root folder";
+    Back => "back", "Back";
+    Forward => "forward", "Forward";
+    GoToFolder => "go-to-folder", "Go to folder…";
+    Reload => "reload", "Refresh";
+    ReloadAll => "reload-all", "Refresh both panes";
+    ToggleHidden => "toggle-hidden", "Show hidden files";
+    SameFolderBoth => "same-folder-both", "Same folder in both panes";
     SwapPanes => "swap-panes", "Swap panes";
+    OpenTerminal => "open-terminal", "Open terminal here";
     // marks
     ToggleMark => "toggle-mark", "Toggle mark";
     MarkAndDown => "mark-and-down", "Toggle mark and move down";
     MarkUp => "mark-up", "Toggle mark and move up";
     MarkDown => "mark-down", "Toggle mark and move down";
-    MarkAll => "mark-all", "Mark all";
-    UnmarkAll => "unmark-all", "Unmark all";
-    InvertMarks => "invert-marks", "Invert marks";
+    MarkAll => "mark-all", "Select all";
+    UnmarkAll => "unmark-all", "Deselect all";
+    MarkPattern => "mark-pattern", "Select by pattern…";
+    UnmarkPattern => "unmark-pattern", "Deselect by pattern…";
+    MarkSameExt => "mark-same-ext", "Select same extension";
+    UnmarkSameExt => "unmark-same-ext", "Deselect same extension";
+    InvertMarks => "invert-marks", "Invert selection";
+    InvertFileMarks => "invert-file-marks", "Invert selection (files only)";
+    // clipboard
+    ClipboardCopy => "clipboard-copy", "Copy";
+    ClipboardCut => "clipboard-cut", "Cut";
+    ClipboardPaste => "clipboard-paste", "Paste";
+    CopyFullPaths => "copy-full-paths", "Copy full path and name";
+    CopyNames => "copy-names", "Copy names";
+    CopyFolderPath => "copy-folder-path", "Copy folder path";
     // sorting
     SortByName => "sort-by-name", "Sort by name";
     SortByExt => "sort-by-ext", "Sort by extension";
@@ -52,18 +66,24 @@ actions! {
     // file operations
     View => "view", "View";
     Edit => "edit", "Edit";
-    Copy => "copy", "Copy";
-    Move => "move", "Move";
-    NewFolder => "new-folder", "New folder";
-    NewFile => "new-file", "New file";
-    Delete => "delete", "Delete (to trash)";
+    Copy => "copy", "Copy…";
+    Move => "move", "Move…";
+    NewFolder => "new-folder", "New folder…";
+    NewFile => "new-file", "New file…";
+    Delete => "delete", "Delete";
     DeletePermanent => "delete-permanent", "Delete permanently";
-    Rename => "rename", "Rename";
-    ClipboardCopy => "clipboard-copy", "Copy to clipboard";
-    ClipboardCut => "clipboard-cut", "Cut to clipboard";
-    ClipboardPaste => "clipboard-paste", "Paste from clipboard";
+    Rename => "rename", "Rename…";
+    // view
+    ToggleSplitOrientation => "toggle-split-orientation", "Horizontal / vertical split";
+    ToggleSinglePane => "toggle-single-pane", "Dual / single pane";
+    ToggleFullscreen => "toggle-fullscreen", "Full screen";
+    ToggleMenuBar => "toggle-menu-bar", "Menu bar";
+    ToggleToolbar => "toggle-toolbar", "Toolbar";
+    TogglePlacesBar => "toggle-places-bar", "Places bar";
+    ToggleFunctionsBar => "toggle-functions-bar", "Functions bar";
     // app
-    Quit => "quit", "Quit";
+    ShowShortcuts => "show-shortcuts", "Keyboard shortcuts";
+    Quit => "quit", "Exit";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

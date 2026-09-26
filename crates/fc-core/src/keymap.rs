@@ -215,16 +215,26 @@ mod tests {
     }
 
     #[test]
-    fn defaults_load_and_cover_every_action() {
+    fn defaults_load_and_bind_the_core_actions() {
         let keymap = Keymap::defaults();
-        for &action in Action::ALL {
+        for action in [
+            Action::Copy,
+            Action::Move,
+            Action::Delete,
+            Action::Rename,
+            Action::NewFolder,
+            Action::SwitchPane,
+            Action::GoUp,
+            Action::Quit,
+        ] {
             assert!(
                 !keymap.chords_for(action).is_empty(),
                 "{action} has no default binding"
             );
         }
         assert_eq!(keymap.lookup(&chord("Tab")), Some(Action::SwitchPane));
-        assert_eq!(keymap.lookup(&chord("Ctrl+h")), Some(Action::ToggleHidden));
+        assert_eq!(keymap.lookup(&chord("F5")), Some(Action::Copy));
+        assert_eq!(keymap.lookup(&chord("KP_Add")), Some(Action::MarkPattern));
         assert_eq!(keymap.lookup(&chord("Ctrl+Shift+h")), None);
     }
 

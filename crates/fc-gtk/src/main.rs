@@ -1,4 +1,5 @@
 mod app;
+mod chrome;
 mod item;
 mod ops;
 mod pane;
@@ -22,6 +23,10 @@ const CSS: &str = "
 .pane.active .path-bar { border-color: @theme_selected_bg_color; }
 .status-bar { font-size: 0.9em; }
 .jobs { border-top: 1px solid alpha(currentColor, 0.2); }
+.toolbar, .places-bar { padding: 2px 4px; border-bottom: 1px solid alpha(currentColor, 0.15); }
+.toolbar separator { margin: 4px 3px; }
+.functions-bar { border-top: 1px solid alpha(currentColor, 0.2); padding: 1px; }
+.functions-bar button { padding: 2px 6px; min-height: 0; }
 ";
 
 fn main() -> glib::ExitCode {
