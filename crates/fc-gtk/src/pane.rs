@@ -18,7 +18,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use fc_core::format::human_size;
-use fc_core::fs::list_dir;
+use fc_core::fs::{Flat, list_dir, list_recursive};
 use fc_core::glob::Mask;
 use fc_core::jobs::{Operation, count};
 use fc_core::sort::{name_key, natural_cmp};
@@ -77,7 +77,6 @@ struct Inner {
     view: gtk::ColumnView,
     grid: gtk::GridView,
     stack: gtk::Stack,
-    tree_scroller: gtk::ScrolledWindow,
     tree_view: gtk::ListView,
     tree_selection: gtk::SingleSelection,
     tree_syncing: Cell<bool>,
@@ -93,6 +92,10 @@ struct Inner {
     monitor: RefCell<Option<gio::FileMonitor>>,
     reload_timer: RefCell<Option<glib::SourceId>>,
     history: RefCell<Vec<PathBuf>>,
+    flat: Cell<Option<Flat>>,
+    only_marked: Rc<Cell<bool>>,
+    side: gtk::Stack,
+    favorites_store: gio::ListStore,
     history_pos: Cell<usize>,
     search: RefCell<String>,
     search_timer: RefCell<Option<glib::SourceId>>,
@@ -113,15 +116,21 @@ impl Pane {
             let show_hidden = Rc::new(Cell::new(false));
             let view_mode = Rc::new(Cell::new(ViewMode::Details));
             let quick_mask: Rc<RefCell<Option<Mask>>> = Rc::new(RefCell::new(None));
+            let only_marked = Rc::new(Cell::new(false));
             let filter = {
                 let show_hidden = show_hidden.clone();
                 let quick_mask = quick_mask.clone();
+                let only_marked = only_marked.clone();
                 gtk::CustomFilter::new(move |obj| {
                     let row = row_of(obj);
                     if row.is_parent {
                         return true;
                     }
                     if !show_hidden.get() && row.entry.is_hidden() {
+                        return false;
+                    }
+                    if only_marked.get() && !obj.downcast_ref::<Item>().is_some_and(|i| i.marked())
+                    {
                         return false;
                     }
                     quick_mask
@@ -224,10 +233,15 @@ impl Pane {
             // ---- folder tree ---------------------------------------------------------
             let (tree_scroller, tree_view, tree_selection) =
                 build_tree(weak.clone(), show_hidden.clone());
+            let (favorites_scroller, favorites_store) = build_favorites(weak.clone());
+            let side = gtk::Stack::builder().visible(false).build();
+            side.add_named(&tree_scroller, Some("tree"));
+            side.add_named(&favorites_scroller, Some("favorites"));
+            tree_scroller.set_visible(true);
 
             let split = gtk::Paned::builder()
                 .orientation(gtk::Orientation::Horizontal)
-                .start_child(&tree_scroller)
+                .start_child(&side)
                 .end_child(&stack)
                 .resize_start_child(false)
                 .shrink_start_child(false)
@@ -271,7 +285,6 @@ impl Pane {
                 view,
                 grid,
                 stack,
-                tree_scroller,
                 tree_view,
                 tree_selection,
                 tree_syncing: Cell::new(false),
@@ -292,6 +305,10 @@ impl Pane {
                 monitor: RefCell::new(None),
                 reload_timer: RefCell::new(None),
                 history: RefCell::new(Vec::new()),
+                flat: Cell::new(None),
+                only_marked,
+                side,
+                favorites_store,
                 history_pos: Cell::new(0),
                 search: RefCell::new(String::new()),
                 search_timer: RefCell::new(None),
@@ -416,11 +433,79 @@ impl Pane {
     }
 
     pub fn toggle_tree(&self) {
-        let tree = &self.0.tree_scroller;
-        tree.set_visible(!tree.is_visible());
-        if tree.is_visible() {
+        if self.toggle_side("tree") {
             self.sync_tree();
         }
+    }
+
+    /// Alt+F: the favorites list in the side panel.
+    pub fn toggle_favorites_panel(&self) {
+        self.toggle_side("favorites");
+    }
+
+    /// Shows `page` in the side panel, or hides the panel if it is already showing.
+    /// Returns true if the page is now visible.
+    fn toggle_side(&self, page: &str) -> bool {
+        let side = &self.0.side;
+        let showing = side.is_visible() && side.visible_child_name().as_deref() == Some(page);
+        if showing {
+            side.set_visible(false);
+            false
+        } else {
+            side.set_visible_child_name(page);
+            side.set_visible(true);
+            true
+        }
+    }
+
+    fn tree_showing(&self) -> bool {
+        self.0.side.is_visible() && self.0.side.visible_child_name().as_deref() == Some("tree")
+    }
+
+    pub fn set_favorites(&self, items: Vec<(String, PathBuf)>) {
+        let objects: Vec<glib::BoxedAnyObject> =
+            items.into_iter().map(glib::BoxedAnyObject::new).collect();
+        self.0
+            .favorites_store
+            .splice(0, self.0.favorites_store.n_items(), &objects);
+    }
+
+    // ---- plain (flat) view and "only selected" -------------------------------
+
+    pub fn flat(&self) -> Option<Flat> {
+        self.0.flat.get()
+    }
+
+    /// Ctrl+B family: list the whole tree under the current folder (or go back to normal).
+    pub fn set_flat(&self, mode: Option<Flat>) {
+        self.0.flat.set(mode);
+        if let Some(cwd) = self.cwd() {
+            self.navigate_with(cwd, self.cursor_name(), false);
+        }
+    }
+
+    /// Ctrl+S: hide everything that is not marked.
+    pub fn toggle_only_marked(&self) {
+        let keep = self.cursor_name();
+        self.0.only_marked.set(!self.0.only_marked.get());
+        self.0.filter.changed(gtk::FilterChange::Different);
+        if let Some(name) = keep {
+            self.select_name(&name);
+        }
+        self.update_status();
+    }
+
+    /// Folders visited, most recent first, without repeats.
+    pub fn history_entries(&self) -> Vec<PathBuf> {
+        let mut seen = HashSet::new();
+        self.0
+            .history
+            .borrow()
+            .iter()
+            .rev()
+            .filter(|p| seen.insert((*p).clone()))
+            .cloned()
+            .collect()
     }
 
     // ---- navigation ----------------------------------------------------------------
@@ -435,10 +520,15 @@ impl Pane {
         let generation = self.0.generation.get() + 1;
         self.0.generation.set(generation);
         let weak = self.downgrade();
+        let flat = self.0.flat.get();
         glib::spawn_future_local(async move {
             let target = path.clone();
             let result = gio::spawn_blocking(move || {
-                list_dir(&target).map(|entries| entries.into_iter().map(Row::new).collect())
+                match flat {
+                    None => list_dir(&target),
+                    Some(keep) => list_recursive(&target, keep),
+                }
+                .map(|entries| entries.into_iter().map(Row::new).collect())
             })
             .await;
             let Some(pane) = Pane::upgrade(&weak) else {
@@ -1102,7 +1192,7 @@ impl Pane {
                 }
                 self.0.history_pos.set(history.len() - 1);
             }
-            if self.0.tree_scroller.is_visible() {
+            if self.tree_showing() {
                 self.sync_tree();
             }
         }
@@ -1286,6 +1376,12 @@ impl Pane {
         if self.0.quick_mask.borrow().is_some() {
             let shown = self.0.selection.n_items().saturating_sub(1);
             text = format!("filter: {shown} of {} shown · {text}", dirs + files);
+        }
+        if self.0.only_marked.get() {
+            text = format!("selected only · {text}");
+        }
+        if self.0.flat.get().is_some() {
+            text = format!("plain view · {text}");
         }
         self.0.status.set_text(&text);
     }
@@ -1735,4 +1831,58 @@ fn build_tree(
         .visible(false)
         .build();
     (scroller, view, selection)
+}
+
+/// Side-panel favorites list; clicking an entry navigates the pane.
+fn build_favorites(weak: Weak<Inner>) -> (gtk::ScrolledWindow, gio::ListStore) {
+    let store = gio::ListStore::new::<glib::BoxedAnyObject>();
+    let selection = gtk::SingleSelection::builder()
+        .model(&store)
+        .autoselect(false)
+        .can_unselect(true)
+        .build();
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let item = list_item(item);
+        let cell = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        cell.append(&gtk::Image::from_icon_name("starred-symbolic"));
+        let label = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        cell.append(&label);
+        item.set_child(Some(&cell));
+    });
+    factory.connect_bind(|_, item| {
+        let item = list_item(item);
+        let label = item
+            .child()
+            .and_then(|c| c.last_child())
+            .and_downcast::<gtk::Label>()
+            .expect("label");
+        if let Some(obj) = item.item().and_downcast::<glib::BoxedAnyObject>() {
+            let (name, path) = &*obj.borrow::<(String, PathBuf)>();
+            label.set_text(name);
+            label.set_tooltip_text(Some(&path.to_string_lossy()));
+        }
+    });
+    let view = gtk::ListView::new(Some(selection.clone()), Some(factory));
+    view.add_css_class("navigation-sidebar");
+    let open = move |obj: Option<glib::Object>| {
+        let Some(pane) = Pane::upgrade(&weak) else {
+            return;
+        };
+        if let Some(obj) = obj.and_downcast::<glib::BoxedAnyObject>() {
+            let path = obj.borrow::<(String, PathBuf)>().1.clone();
+            pane.navigate(path, None);
+        }
+    };
+    let open_sel = open.clone();
+    selection.connect_selected_item_notify(move |s| open_sel(s.selected_item()));
+    view.connect_activate(move |v, pos| open(v.model().and_then(|m| m.item(pos))));
+    let scroller = gtk::ScrolledWindow::builder()
+        .child(&view)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .build();
+    (scroller, store)
 }

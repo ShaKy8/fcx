@@ -58,6 +58,14 @@ actions! {
     EditFavorites => "edit-favorites", "Edit favorites…";
     FavoritesMenu => "favorites-menu", "Favorites menu";
     ToggleTree => "toggle-tree", "Folder tree";
+    ToggleFavoritesPanel => "toggle-favorites-panel", "Favorites panel";
+    HistoryMenu => "history-menu", "Folder history";
+    FlatFiles => "flat-files", "Plain view: files";
+    FlatFolders => "flat-folders", "Plain view: folders";
+    FlatAll => "flat-all", "Plain view: files and folders";
+    ShowOnlyMarked => "show-only-marked", "Show only selected";
+    Checksums => "checksums", "Checksums…";
+    CompareFiles => "compare-files", "Compare files";
     CalcSize => "calc-size", "Calculate folder size";
     CalcSizeAll => "calc-size-all", "Calculate all folder sizes";
     // marks

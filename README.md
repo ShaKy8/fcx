@@ -59,7 +59,9 @@ Press **F1** inside fcx for the full list. The defaults follow FreeCommander XE:
 F2 rename · F3 view · F4 edit · F5 copy · F6 move · F7 new folder · F8/Del trash ·
 Ctrl+M multi rename · Ctrl+F / Alt+F7 search · Ctrl+Y quick filter · Alt+V compare ·
 Alt+S synchronize · Ctrl+Q quick view · Alt+F5 pack · Alt+F6 unpack · Ctrl+T/W tabs ·
-Shift+Ctrl+V add favorite · Alt+Up favorites. Override any of them in
+Shift+Ctrl+V add favorite · Alt+Up favorites · Alt+F favorites panel · Alt+Down history ·
+Ctrl+B / Shift+Ctrl+B / Ctrl+Alt+B plain view · Ctrl+S show only selected · Ctrl+K checksums ·
+Ctrl+Alt+V compare files · F12 settings. Override any of them in
 `~/.config/fcx/keymap.toml` (see `crates/fc-core/src/keymap.default.toml`).
 
 ## License

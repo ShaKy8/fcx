@@ -15,6 +15,7 @@ use fc_core::archive;
 use fc_core::compare::{self, Options as CompareOptions, Status, SyncAction};
 use fc_core::config::{DragDefault, Session, Settings, SideSession, ViewKind};
 use fc_core::favorites::Favorites;
+use fc_core::fs::Flat;
 use fc_core::glob::Mask;
 use fc_core::jobs::{ConflictReply, JobSpec, Operation};
 use fc_core::keymap::{Chord, Keymap, Mods};
@@ -22,8 +23,10 @@ use fc_core::rename::{self, Source};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
+use crate::checksums;
 use crate::chrome::{self, FunctionsBar, PlacesBar};
 use crate::favorites;
+use crate::filediff;
 use crate::host::PaneHost;
 use crate::multirename;
 use crate::ops::{self, JobRunner};
@@ -148,6 +151,7 @@ impl App {
                         let settings = app.settings.borrow();
                         pane.set_show_hidden(settings.show_hidden);
                         pane.set_view_mode(view_mode(settings.default_view));
+                        pane.set_favorites(app.favorite_items());
                     }
                     let w = weak.clone();
                     pane.connect_activate_file(move |path| {
@@ -476,6 +480,14 @@ impl App {
             Action::CompareFolders => self.compare_folders(),
             Action::SyncFolders => self.sync_folders(),
             Action::ToggleTree => pane.toggle_tree(),
+            Action::ToggleFavoritesPanel => pane.toggle_favorites_panel(),
+            Action::HistoryMenu => self.history_menu(),
+            Action::FlatFiles => toggle_flat(&pane, Flat::Files),
+            Action::FlatFolders => toggle_flat(&pane, Flat::Folders),
+            Action::FlatAll => toggle_flat(&pane, Flat::All),
+            Action::ShowOnlyMarked => pane.toggle_only_marked(),
+            Action::Checksums => self.checksums(),
+            Action::CompareFiles => self.compare_files(),
             Action::CalcSize => pane.calc_sizes(false),
             Action::CalcSizeAll => pane.calc_sizes(true),
             Action::Open => pane.activate_cursor(),
@@ -601,6 +613,7 @@ impl App {
             &self.favorites_menu,
             &self.favorites.borrow(),
         );
+        self.push_favorites();
     }
 
     fn save_favorites(&self, favs: Favorites) {
@@ -613,6 +626,7 @@ impl App {
             &self.favorites_menu,
             &self.favorites.borrow(),
         );
+        self.push_favorites();
     }
 
     fn add_favorite(&self) {
@@ -941,6 +955,80 @@ impl App {
                 app.active_pane().mark_all(false);
             },
         );
+    }
+
+    fn favorite_items(&self) -> Vec<(String, PathBuf)> {
+        self.favorites
+            .borrow()
+            .items
+            .iter()
+            .map(|f| (f.name.clone(), f.path.clone()))
+            .collect()
+    }
+
+    /// Keep every pane's favorites side panel in sync.
+    fn push_favorites(&self) {
+        let items = self.favorite_items();
+        for host in &self.hosts {
+            for pane in host.panes() {
+                pane.set_favorites(items.clone());
+            }
+        }
+    }
+
+    /// Alt+Down: the active pane's folder history as a popup.
+    fn history_menu(&self) {
+        let pane = self.active_pane();
+        let menu = gio::Menu::new();
+        for path in pane.history_entries().into_iter().take(20) {
+            let item = gio::MenuItem::new(Some(&path.to_string_lossy()), None);
+            let target = path.to_string_lossy().to_variant();
+            item.set_action_and_target_value(
+                Some(&format!("app.{}", favorites::OPEN_ACTION)),
+                Some(&target),
+            );
+            menu.append_item(&item);
+        }
+        favorites::popup(&pane.view_widget(), &menu);
+    }
+
+    /// Ctrl+K: checksums of the marked/cursor files.
+    fn checksums(&self) {
+        let Some((cwd, _, paths)) = self.sources() else {
+            return;
+        };
+        let files: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_file()).collect();
+        if files.is_empty() {
+            ops::alert(
+                self.win(),
+                "Nothing to hash",
+                "Select one or more files first.",
+            );
+            return;
+        }
+        checksums::show(self.win(), cwd, files);
+    }
+
+    /// Ctrl+Alt+V: two marked files in the active pane, else the cursor files of both panes.
+    fn compare_files(&self) {
+        let pane = self.active_pane();
+        let marked = pane.marked_names();
+        let pair = match (marked.as_slice(), pane.cwd()) {
+            ([a, b], Some(cwd)) => Some((cwd.join(a), cwd.join(b))),
+            _ => {
+                let left = self.hosts[0].current().cursor_path();
+                let right = self.hosts[1].current().cursor_path();
+                left.zip(right)
+            }
+        };
+        match pair {
+            Some((a, b)) if a.is_file() && b.is_file() => filediff::show(self.win(), a, b),
+            _ => ops::alert(
+                self.win(),
+                "Nothing to compare",
+                "Mark two files in one pane, or put the cursor on a file in each pane.",
+            ),
+        }
     }
 
     /// Alt+V: mark, in both panes, everything that differs between them.
@@ -1582,6 +1670,15 @@ enum PathText {
     Full,
     Names,
     Folder,
+}
+
+/// Pressing the active plain-view key again returns to the normal listing.
+fn toggle_flat(pane: &Pane, mode: Flat) {
+    if pane.flat() == Some(mode) {
+        pane.set_flat(None);
+    } else {
+        pane.set_flat(Some(mode));
+    }
 }
 
 fn view_mode(kind: ViewKind) -> ViewMode {

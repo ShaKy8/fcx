@@ -1,6 +1,8 @@
 mod app;
+mod checksums;
 mod chrome;
 mod favorites;
+mod filediff;
 mod host;
 mod item;
 mod multirename;

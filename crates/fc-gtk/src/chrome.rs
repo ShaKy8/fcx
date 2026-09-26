@@ -83,6 +83,13 @@ const MENUS: &[(&str, &[&[Action]])] = &[
             ],
             &[Action::CalcSize, Action::CalcSizeAll],
             &[
+                Action::CompareFolders,
+                Action::SyncFolders,
+                Action::CompareFiles,
+                Action::Checksums,
+            ],
+            &[Action::HistoryMenu],
+            &[
                 Action::SortByName,
                 Action::SortByExt,
                 Action::SortByDate,
@@ -97,8 +104,12 @@ const MENUS: &[(&str, &[&[Action]])] = &[
             &[
                 Action::ToggleHidden,
                 Action::QuickFilter,
+                Action::ShowOnlyMarked,
                 Action::ToggleTree,
+                Action::ToggleFavoritesPanel,
+                Action::QuickView,
             ],
+            &[Action::FlatFiles, Action::FlatFolders, Action::FlatAll],
             &[
                 Action::ViewDetails,
                 Action::ViewList,
