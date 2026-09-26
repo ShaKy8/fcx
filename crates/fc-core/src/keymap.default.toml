@@ -24,6 +24,10 @@ F7 = "new-folder"
 F8 = "delete"                  # functions-bar convention; FC's list has Del only
 Delete = "delete"
 "Shift+Delete" = "delete-permanent"
+"Alt+Return" = "properties"
+"Shift+Return" = "change-attributes"
+"Shift+F10" = "context-menu"
+Menu = "context-menu"
 
 # --- clipboard ---
 "Ctrl+c" = "clipboard-copy"
@@ -61,6 +65,8 @@ BackSpace = "go-up"
 "Ctrl+e" = "same-folder-both"
 "Ctrl+u" = "swap-panes"
 "Ctrl+d" = "open-terminal"
+"Ctrl+F9" = "calc-size"
+"Alt+F9" = "calc-size-all"
 
 # --- sorting ---
 "Ctrl+F3" = "sort-by-name"
@@ -72,6 +78,11 @@ BackSpace = "go-up"
 # --- view ---
 "Alt+h" = "toggle-hidden"      # fc extra: FC has no default key for hidden files
 "Ctrl+h" = "toggle-split-orientation"
+"Alt+t" = "toggle-tree"
+"Ctrl+F1" = "view-list"
+"Ctrl+F2" = "view-details"
+"Ctrl+i" = "view-thumbnails"
+F9 = "view-cycle"
 F10 = "toggle-single-pane"
 F11 = "toggle-fullscreen"
 

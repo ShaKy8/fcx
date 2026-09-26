@@ -19,7 +19,8 @@ use gtk::{gdk, gio, glib};
 
 use crate::chrome::{self, FunctionsBar, PlacesBar};
 use crate::ops::{self, JobRunner};
-use crate::pane::{Pane, SortColumn, expand_path};
+use crate::pane::{Pane, SortColumn, ViewMode, expand_path};
+use crate::props;
 
 pub struct App {
     weak: Weak<App>,
@@ -114,6 +115,13 @@ impl App {
                     app.dropped(i, paths, forced);
                 }
             });
+            let weak = app.weak.clone();
+            pane.connect_context_menu(move |anchor, x, y| {
+                if let Some(app) = weak.upgrade() {
+                    app.set_active(i, false);
+                    app.show_context_menu(anchor, x, y);
+                }
+            });
         }
         let weak = app.weak.clone();
         app.runner.connect_finished(move || {
@@ -153,16 +161,28 @@ impl App {
         if GtkWindowExt::focus(&self.window).is_some_and(|w| w.is::<gtk::Text>()) {
             return glib::Propagation::Proceed;
         }
+        let pane = self.active_pane();
+        // An active quick search owns Escape and Backspace.
+        if pane.quick_search_active()
+            && matches!(key, gdk::Key::Escape | gdk::Key::BackSpace)
+            && pane.quick_search_key(key)
+        {
+            return glib::Propagation::Stop;
+        }
         let Some(chord) = chord_for(key, state) else {
             return glib::Propagation::Proceed;
         };
-        match self.keymap.lookup(&chord) {
-            Some(action) => {
-                self.run(action);
-                glib::Propagation::Stop
-            }
-            None => glib::Propagation::Proceed,
+        if let Some(action) = self.keymap.lookup(&chord) {
+            self.run(action);
+            return glib::Propagation::Stop;
         }
+        // Unbound printable keys type into the quick search.
+        let plain =
+            !state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK);
+        if plain && pane.quick_search_key(key) {
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
     }
 
     pub fn run(&self, action: Action) {
@@ -189,6 +209,18 @@ impl App {
                 }
             }
             Action::OpenTerminal => self.open_terminal(),
+            Action::ToggleTree => pane.toggle_tree(),
+            Action::CalcSize => pane.calc_sizes(false),
+            Action::CalcSizeAll => pane.calc_sizes(true),
+            Action::Open => pane.activate_cursor(),
+            Action::OpenWith => self.open_with(),
+            Action::Properties => self.properties(false),
+            Action::ChangeAttributes => self.properties(true),
+            Action::ContextMenu => pane.context_menu_at_cursor(),
+            Action::ViewList => pane.set_view_mode(ViewMode::List),
+            Action::ViewDetails => pane.set_view_mode(ViewMode::Details),
+            Action::ViewThumbnails => pane.set_view_mode(ViewMode::Thumbnails),
+            Action::ViewCycle => pane.cycle_view(),
             Action::ToggleMark => pane.toggle_mark(),
             Action::MarkAndDown | Action::MarkDown => pane.toggle_mark_and_step(1),
             Action::MarkUp => pane.toggle_mark_and_step(-1),
@@ -286,6 +318,72 @@ impl App {
         }
         let paths = names.iter().map(|n| cwd.join(n)).collect();
         Some((cwd, names, paths))
+    }
+
+    /// Right-click menu, anchored inside `anchor` at (x, y).
+    fn show_context_menu(&self, anchor: &gtk::Widget, x: f64, y: f64) {
+        let sections: &[&[Action]] = &[
+            &[Action::Open, Action::OpenWith, Action::View, Action::Edit],
+            &[
+                Action::ClipboardCut,
+                Action::ClipboardCopy,
+                Action::ClipboardPaste,
+            ],
+            &[Action::Copy, Action::Move, Action::Rename],
+            &[Action::Delete, Action::DeletePermanent],
+            &[
+                Action::CopyFullPaths,
+                Action::NewFolder,
+                Action::OpenTerminal,
+            ],
+            &[Action::Properties],
+        ];
+        let menu = gio::Menu::new();
+        for section in sections {
+            let items = gio::Menu::new();
+            for action in section.iter() {
+                items.append(Some(action.label()), Some(&format!("app.{}", action.id())));
+            }
+            menu.append_section(None, &items);
+        }
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_parent(anchor);
+        popover.set_has_arrow(false);
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.connect_closed(|popover| {
+            // Unparent once the popover is done, outside the signal emission.
+            let popover = popover.clone();
+            glib::idle_add_local_once(move || popover.unparent());
+        });
+        popover.popup();
+    }
+
+    fn open_with(&self) {
+        let pane = self.active_pane();
+        let (Some(cwd), Some(name)) = (pane.cwd(), pane.cursor_name()) else {
+            return;
+        };
+        let file = gio::File::for_path(cwd.join(name));
+        let launcher = gtk::FileLauncher::new(Some(&file));
+        launcher.set_always_ask(true);
+        launcher.launch(Some(self.win()), gio::Cancellable::NONE, |_| {});
+    }
+
+    fn properties(&self, attributes: bool) {
+        let pane = self.active_pane();
+        let Some(cwd) = pane.cwd() else {
+            return;
+        };
+        let path = match pane.cursor_name() {
+            Some(name) => cwd.join(name),
+            None => cwd,
+        };
+        let weak = self.weak.clone();
+        props::show(self.win(), path, attributes, move || {
+            if let Some(app) = weak.upgrade() {
+                app.reload_all();
+            }
+        });
     }
 
     fn open_terminal(&self) {

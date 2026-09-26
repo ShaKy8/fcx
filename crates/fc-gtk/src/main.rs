@@ -3,6 +3,7 @@ mod chrome;
 mod item;
 mod ops;
 mod pane;
+mod props;
 mod row;
 
 use std::path::PathBuf;
@@ -27,6 +28,9 @@ const CSS: &str = "
 .toolbar separator { margin: 4px 3px; }
 .functions-bar { border-top: 1px solid alpha(currentColor, 0.2); padding: 1px; }
 .functions-bar button { padding: 2px 6px; min-height: 0; }
+.file-grid { padding: 4px; }
+.file-grid.thumbnails > child { padding: 6px; }
+.folder-tree { font-size: 0.95em; }
 ";
 
 fn main() -> glib::ExitCode {

@@ -19,7 +19,13 @@ const MENUS: &[(&str, &[&[Action]])] = &[
     (
         "_File",
         &[
-            &[Action::View, Action::Edit, Action::NewFile],
+            &[
+                Action::Open,
+                Action::OpenWith,
+                Action::View,
+                Action::Edit,
+                Action::NewFile,
+            ],
             &[
                 Action::Copy,
                 Action::Move,
@@ -27,6 +33,7 @@ const MENUS: &[(&str, &[&[Action]])] = &[
                 Action::Rename,
             ],
             &[Action::Delete, Action::DeletePermanent],
+            &[Action::Properties, Action::ChangeAttributes],
             &[Action::OpenTerminal],
             &[Action::Quit],
         ],
@@ -71,6 +78,7 @@ const MENUS: &[(&str, &[&[Action]])] = &[
                 Action::SwapPanes,
                 Action::SwitchPane,
             ],
+            &[Action::CalcSize, Action::CalcSizeAll],
             &[
                 Action::SortByName,
                 Action::SortByExt,
@@ -83,7 +91,13 @@ const MENUS: &[(&str, &[&[Action]])] = &[
         "_View",
         &[
             &[Action::Reload, Action::ReloadAll],
-            &[Action::ToggleHidden],
+            &[Action::ToggleHidden, Action::ToggleTree],
+            &[
+                Action::ViewDetails,
+                Action::ViewList,
+                Action::ViewThumbnails,
+                Action::ViewCycle,
+            ],
             &[
                 Action::ToggleSplitOrientation,
                 Action::ToggleSinglePane,
@@ -97,7 +111,7 @@ const MENUS: &[(&str, &[&[Action]])] = &[
             ],
         ],
     ),
-    ("_Help", &[&[Action::ShowShortcuts]]),
+    ("Hel_p", &[&[Action::ShowShortcuts]]),
 ];
 
 /// Toolbar buttons: (action, icon name).

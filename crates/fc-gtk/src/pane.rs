@@ -1,11 +1,13 @@
-//! A single file-listing pane: path bar, sortable column view, status line.
+//! A single file-listing pane: path bar, optional folder tree, the file view
+//! (details / list / thumbnails), and a status line.
 //!
 //! Listing runs on a worker thread; results are applied on the main thread only if
 //! no newer navigation started in the meantime (tracked by `generation`).
 //!
 //! Selection is Commander-style: the *cursor* is GTK's single selection (moved by
 //! arrows/mouse) and *marks* are a separate per-item flag. Actions operate on the
-//! marked items, or on the cursor item when nothing is marked.
+//! marked items, or on the cursor item when nothing is marked. All three views
+//! share one selection model, so switching views keeps cursor and marks.
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
@@ -17,8 +19,8 @@ use std::time::Duration;
 
 use fc_core::format::human_size;
 use fc_core::fs::list_dir;
-use fc_core::jobs::Operation;
-use fc_core::sort::natural_cmp;
+use fc_core::jobs::{Operation, count};
+use fc_core::sort::{name_key, natural_cmp};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
@@ -27,6 +29,9 @@ use crate::row::Row;
 
 /// Coalesces bursts of file-monitor events (e.g. an extracting archive) into one reload.
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
+/// Quick search resets this long after the last typed character.
+const SEARCH_TIMEOUT: Duration = Duration::from_millis(1800);
+const THUMBNAIL_SIZE: i32 = 112;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumn {
@@ -36,9 +41,18 @@ pub enum SortColumn {
     Date,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Details,
+    List,
+    Thumbnails,
+}
+
 /// Files dropped on this pane, plus the operation forced by modifiers (Ctrl = copy,
 /// Shift = move) or `None` to let the app decide.
 type DropHandler = Rc<dyn Fn(Vec<PathBuf>, Option<Operation>)>;
+/// Right-click (or Shift+F10): the widget to anchor a menu on and the position inside it.
+type ContextHandler = Rc<dyn Fn(&gtk::Widget, f64, f64)>;
 
 #[derive(Clone)]
 pub struct Pane(Rc<Inner>);
@@ -54,19 +68,29 @@ struct Inner {
     root: gtk::Box,
     path_entry: gtk::Entry,
     view: gtk::ColumnView,
+    grid: gtk::GridView,
+    stack: gtk::Stack,
+    tree_scroller: gtk::ScrolledWindow,
+    tree_view: gtk::ListView,
+    tree_selection: gtk::SingleSelection,
+    tree_syncing: Cell<bool>,
     store: gio::ListStore,
     filter: gtk::CustomFilter,
     selection: gtk::SingleSelection,
     status: gtk::Label,
     columns: Columns,
     show_hidden: Rc<Cell<bool>>,
+    view_mode: Rc<Cell<ViewMode>>,
     cwd: RefCell<Option<PathBuf>>,
     generation: Cell<u64>,
     monitor: RefCell<Option<gio::FileMonitor>>,
     reload_timer: RefCell<Option<glib::SourceId>>,
     history: RefCell<Vec<PathBuf>>,
     history_pos: Cell<usize>,
+    search: RefCell<String>,
+    search_timer: RefCell<Option<glib::SourceId>>,
     on_drop: RefCell<Option<DropHandler>>,
+    on_context: RefCell<Option<ContextHandler>>,
 }
 
 impl Pane {
@@ -75,6 +99,7 @@ impl Pane {
             let store = gio::ListStore::new::<Item>();
 
             let show_hidden = Rc::new(Cell::new(false));
+            let view_mode = Rc::new(Cell::new(ViewMode::Details));
             let filter = {
                 let show_hidden = show_hidden.clone();
                 gtk::CustomFilter::new(move |obj| {
@@ -84,25 +109,35 @@ impl Pane {
             };
             let filtered = gtk::FilterListModel::new(Some(store.clone()), Some(filter.clone()));
 
+            // ---- details view ------------------------------------------------
             let view = gtk::ColumnView::new(None::<gtk::SelectionModel>);
             view.add_css_class("data-table");
             view.set_reorderable(false);
 
-            let by_name = |a: &Row, b: &Row| natural_cmp(&a.sort_key, &b.sort_key);
+            let by_name = |a: &Item, b: &Item| natural_cmp(&a.row().sort_key, &b.row().sort_key);
             let name = add_column(&view, "Name", true, name_factory(weak.clone()), by_name);
             let ext = add_column(
                 &view,
                 "Ext",
                 false,
                 text_factory(weak.clone(), Row::ext_text, 0.0),
-                move |a, b| a.ext_key.cmp(&b.ext_key).then_with(|| by_name(a, b)),
+                move |a, b| {
+                    a.row()
+                        .ext_key
+                        .cmp(&b.row().ext_key)
+                        .then_with(|| by_name(a, b))
+                },
             );
             let size = add_column(
                 &view,
                 "Size",
                 false,
-                text_factory(weak.clone(), Row::size_text, 1.0),
-                move |a, b| a.entry.size.cmp(&b.entry.size).then_with(|| by_name(a, b)),
+                size_factory(weak.clone()),
+                move |a, b| {
+                    a.effective_size()
+                        .cmp(&b.effective_size())
+                        .then_with(|| by_name(a, b))
+                },
             );
             let modified = add_column(
                 &view,
@@ -110,9 +145,10 @@ impl Pane {
                 false,
                 text_factory(weak.clone(), Row::modified_text, 0.0),
                 move |a, b| {
-                    a.entry
+                    a.row()
+                        .entry
                         .modified
-                        .cmp(&b.entry.modified)
+                        .cmp(&b.row().entry.modified)
                         .then_with(|| by_name(a, b))
                 },
             );
@@ -122,9 +158,10 @@ impl Pane {
                 false,
                 text_factory(weak.clone(), Row::mode_text, 0.0),
                 move |a, b| {
-                    a.entry
+                    a.row()
+                        .entry
                         .permissions()
-                        .cmp(&b.entry.permissions())
+                        .cmp(&b.row().entry.permissions())
                         .then_with(|| by_name(a, b))
                 },
             );
@@ -142,6 +179,40 @@ impl Pane {
             view.set_model(Some(&selection));
             view.sort_by_column(Some(&name), gtk::SortType::Ascending);
 
+            // ---- list / thumbnails view (same selection) --------------------------
+            let grid = gtk::GridView::builder()
+                .model(&selection)
+                .factory(&grid_factory(weak.clone(), view_mode.clone()))
+                .max_columns(64)
+                .min_columns(1)
+                .build();
+            grid.add_css_class("file-grid");
+
+            let stack = gtk::Stack::builder().hexpand(true).vexpand(true).build();
+            stack.add_named(
+                &gtk::ScrolledWindow::builder().child(&view).build(),
+                Some("details"),
+            );
+            stack.add_named(
+                &gtk::ScrolledWindow::builder().child(&grid).build(),
+                Some("grid"),
+            );
+
+            // ---- folder tree ---------------------------------------------------------
+            let (tree_scroller, tree_view, tree_selection) =
+                build_tree(weak.clone(), show_hidden.clone());
+
+            let split = gtk::Paned::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .start_child(&tree_scroller)
+                .end_child(&stack)
+                .resize_start_child(false)
+                .shrink_start_child(false)
+                .resize_end_child(true)
+                .position(220)
+                .vexpand(true)
+                .build();
+
             let path_entry = gtk::Entry::new();
             path_entry.add_css_class("path-bar");
             let status = gtk::Label::builder()
@@ -153,21 +224,22 @@ impl Pane {
                 .margin_bottom(2)
                 .build();
             status.add_css_class("status-bar");
-            let scroller = gtk::ScrolledWindow::builder()
-                .child(&view)
-                .vexpand(true)
-                .hexpand(true)
-                .build();
             let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
             root.add_css_class("pane");
             root.append(&path_entry);
-            root.append(&scroller);
+            root.append(&split);
             root.append(&status);
 
             Inner {
                 root,
                 path_entry,
                 view,
+                grid,
+                stack,
+                tree_scroller,
+                tree_view,
+                tree_selection,
+                tree_syncing: Cell::new(false),
                 store,
                 filter,
                 selection,
@@ -179,13 +251,17 @@ impl Pane {
                     modified,
                 },
                 show_hidden,
+                view_mode,
                 cwd: RefCell::new(None),
                 generation: Cell::new(0),
                 monitor: RefCell::new(None),
                 reload_timer: RefCell::new(None),
                 history: RefCell::new(Vec::new()),
                 history_pos: Cell::new(0),
+                search: RefCell::new(String::new()),
+                search_timer: RefCell::new(None),
                 on_drop: RefCell::new(None),
+                on_context: RefCell::new(None),
             }
         }));
         pane.connect_signals();
@@ -196,8 +272,16 @@ impl Pane {
         self.0.root.upcast_ref()
     }
 
+    /// The file view currently shown (for anchoring popovers).
+    pub fn view_widget(&self) -> gtk::Widget {
+        match self.0.view_mode.get() {
+            ViewMode::Details => self.0.view.clone().upcast(),
+            _ => self.0.grid.clone().upcast(),
+        }
+    }
+
     pub fn focus(&self) {
-        self.0.view.grab_focus();
+        self.view_widget().grab_focus();
     }
 
     /// Runs `f` whenever keyboard focus enters this pane (a click, Tab, etc.).
@@ -209,6 +293,18 @@ impl Pane {
 
     pub fn connect_drop(&self, f: impl Fn(Vec<PathBuf>, Option<Operation>) + 'static) {
         *self.0.on_drop.borrow_mut() = Some(Rc::new(f));
+    }
+
+    pub fn connect_context_menu(&self, f: impl Fn(&gtk::Widget, f64, f64) + 'static) {
+        *self.0.on_context.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Shift+F10: open the context menu near the top of the view.
+    pub fn context_menu_at_cursor(&self) {
+        let handler = self.0.on_context.borrow().clone();
+        if let Some(handler) = handler {
+            handler(&self.view_widget(), 24.0, 24.0);
+        }
     }
 
     /// Visual "this is the active pane" state. Focus itself is separate.
@@ -224,12 +320,59 @@ impl Pane {
         self.0.cwd.borrow().clone()
     }
 
+    // ---- views ---------------------------------------------------------------
+
+    pub fn set_view_mode(&self, mode: ViewMode) {
+        let keep = self.cursor();
+        self.0.view_mode.set(mode);
+        let page = match mode {
+            ViewMode::Details => "details",
+            ViewMode::List | ViewMode::Thumbnails => "grid",
+        };
+        self.0.stack.set_visible_child_name(page);
+        if mode == ViewMode::Thumbnails {
+            self.0.grid.add_css_class("thumbnails");
+        } else {
+            self.0.grid.remove_css_class("thumbnails");
+        }
+        // Rebind so cells pick up the new geometry.
+        let n = self.0.store.n_items();
+        if n > 0 {
+            self.0.store.items_changed(0, 0, 0);
+        }
+        let factory = grid_factory(self.downgrade(), self.0.view_mode.clone());
+        self.0.grid.set_factory(Some(&factory));
+        if let Some(pos) = keep {
+            self.select_pos(pos);
+        }
+        self.focus();
+    }
+
+    pub fn cycle_view(&self) {
+        self.set_view_mode(match self.0.view_mode.get() {
+            ViewMode::Details => ViewMode::List,
+            ViewMode::List => ViewMode::Thumbnails,
+            ViewMode::Thumbnails => ViewMode::Details,
+        });
+    }
+
+    pub fn toggle_tree(&self) {
+        let tree = &self.0.tree_scroller;
+        tree.set_visible(!tree.is_visible());
+        if tree.is_visible() {
+            self.sync_tree();
+        }
+    }
+
+    // ---- navigation ----------------------------------------------------------------
+
     /// List `path` asynchronously; once loaded, put the cursor on `select` if present.
     pub fn navigate(&self, path: PathBuf, select: Option<OsString>) {
         self.navigate_with(path, select, true);
     }
 
     fn navigate_with(&self, path: PathBuf, select: Option<OsString>, record: bool) {
+        self.clear_search();
         let generation = self.0.generation.get() + 1;
         self.0.generation.set(generation);
         let weak = self.downgrade();
@@ -331,6 +474,13 @@ impl Pane {
         self.0.path_entry.select_region(0, -1);
     }
 
+    /// Enter on the cursor item: enter a folder or open a file.
+    pub fn activate_cursor(&self) {
+        if let Some(pos) = self.cursor() {
+            self.activate(pos);
+        }
+    }
+
     /// Sort by `column`; sorting by the current column again flips the direction.
     pub fn sort_by(&self, column: SortColumn) {
         let column = match column {
@@ -350,6 +500,123 @@ impl Pane {
             gtk::SortType::Ascending
         };
         self.0.view.sort_by_column(Some(column), order);
+    }
+
+    /// Alt+F9 (`all`) / Ctrl+F9: compute folder sizes into the Size column.
+    pub fn calc_sizes(&self, all: bool) {
+        let Some(cwd) = self.cwd() else {
+            return;
+        };
+        let targets: Vec<Item> = if all {
+            self.visible_items()
+                .filter(|i| !i.row().is_parent && i.row().entry.is_dir_like())
+                .collect()
+        } else {
+            let names: HashSet<OsString> = self.targets().into_iter().collect();
+            self.visible_items()
+                .filter(|i| i.row().entry.is_dir_like() && names.contains(i.row().name()))
+                .collect()
+        };
+        for item in targets {
+            let path = cwd.join(item.row().name());
+            let weak = self.downgrade();
+            glib::spawn_future_local(async move {
+                let (_, bytes) = gio::spawn_blocking(move || count(&path))
+                    .await
+                    .unwrap_or_default();
+                item.set_computed_size(i64::try_from(bytes).unwrap_or(i64::MAX));
+                if let Some(pane) = Pane::upgrade(&weak) {
+                    pane.update_status();
+                }
+            });
+        }
+    }
+
+    // ---- quick search ------------------------------------------------------------
+
+    pub fn quick_search_active(&self) -> bool {
+        !self.0.search.borrow().is_empty()
+    }
+
+    /// Feed a key to the type-ahead search. Returns true if it was consumed.
+    pub fn quick_search_key(&self, key: gdk::Key) -> bool {
+        match key {
+            gdk::Key::Escape if self.quick_search_active() => {
+                self.clear_search();
+                true
+            }
+            gdk::Key::BackSpace if self.quick_search_active() => {
+                self.0.search.borrow_mut().pop();
+                self.search_changed();
+                true
+            }
+            _ => match key.to_unicode() {
+                Some(c) if !c.is_control() => {
+                    self.0.search.borrow_mut().push(c);
+                    self.search_changed();
+                    true
+                }
+                _ => false,
+            },
+        }
+    }
+
+    fn search_changed(&self) {
+        let needle = name_key(OsStr::new(self.0.search.borrow().as_str()));
+        if needle.is_empty() {
+            self.clear_search();
+            return;
+        }
+        let n = self.0.selection.n_items();
+        let start = self.cursor().unwrap_or(0);
+        // Prefer a match at or after the cursor, then wrap; prefix beats substring.
+        let order = (start..n).chain(0..start);
+        let mut substring = None;
+        let mut prefix = None;
+        for pos in order {
+            let Some(item) = self.item_at(pos) else {
+                continue;
+            };
+            let key = &item.row().sort_key;
+            if key.starts_with(&needle) {
+                prefix = Some(pos);
+                break;
+            }
+            if substring.is_none() && key.contains(&needle) {
+                substring = Some(pos);
+            }
+        }
+        if let Some(pos) = prefix.or(substring) {
+            self.select_pos(pos);
+        }
+        self.0
+            .status
+            .set_text(&format!("Search: {}", self.0.search.borrow()));
+        self.arm_search_timer();
+    }
+
+    fn arm_search_timer(&self) {
+        if let Some(id) = self.0.search_timer.take() {
+            id.remove();
+        }
+        let weak = self.downgrade();
+        let id = glib::timeout_add_local_once(SEARCH_TIMEOUT, move || {
+            if let Some(pane) = Pane::upgrade(&weak) {
+                pane.0.search_timer.take();
+                pane.clear_search();
+            }
+        });
+        *self.0.search_timer.borrow_mut() = Some(id);
+    }
+
+    fn clear_search(&self) {
+        if let Some(id) = self.0.search_timer.take() {
+            id.remove();
+        }
+        if !self.0.search.borrow().is_empty() {
+            self.0.search.borrow_mut().clear();
+            self.update_status();
+        }
     }
 
     // ---- marks -------------------------------------------------------------
@@ -481,6 +748,12 @@ impl Pane {
                 pane.activate(pos);
             }
         });
+        let weak = self.downgrade();
+        self.0.grid.connect_activate(move |_, pos| {
+            if let Some(pane) = Pane::upgrade(&weak) {
+                pane.activate(pos);
+            }
+        });
 
         let weak = self.downgrade();
         self.0.path_entry.connect_activate(move |entry| {
@@ -507,35 +780,84 @@ impl Pane {
         });
         self.0.path_entry.add_controller(keys);
 
+        for view in [
+            self.0.view.clone().upcast::<gtk::Widget>(),
+            self.0.grid.clone().upcast::<gtk::Widget>(),
+        ] {
+            let weak = self.downgrade();
+            let drop = gtk::DropTarget::new(
+                gdk::FileList::static_type(),
+                gdk::DragAction::COPY | gdk::DragAction::MOVE,
+            );
+            drop.connect_drop(move |target, value, _, _| {
+                let Some(pane) = Pane::upgrade(&weak) else {
+                    return false;
+                };
+                let Ok(list) = value.get::<gdk::FileList>() else {
+                    return false;
+                };
+                let paths: Vec<PathBuf> = list.files().iter().filter_map(|f| f.path()).collect();
+                let handler = pane.0.on_drop.borrow().clone();
+                let (Some(handler), false) = (handler, paths.is_empty()) else {
+                    return false;
+                };
+                let state = target.current_event_state();
+                let forced = if state.contains(gdk::ModifierType::CONTROL_MASK) {
+                    Some(Operation::Copy)
+                } else if state.contains(gdk::ModifierType::SHIFT_MASK) {
+                    Some(Operation::Move)
+                } else {
+                    None
+                };
+                handler(paths, forced);
+                true
+            });
+            view.add_controller(drop);
+
+            // Right-click anywhere in the view: cells set the cursor first (their
+            // own gesture runs before this one bubbles up), then the menu opens.
+            let weak = self.downgrade();
+            let gesture = gtk::GestureClick::builder()
+                .button(gdk::BUTTON_SECONDARY)
+                .build();
+            gesture.connect_pressed(glib::clone!(
+                #[weak]
+                view,
+                move |_, _, x, y| {
+                    let Some(pane) = Pane::upgrade(&weak) else {
+                        return;
+                    };
+                    let handler = pane.0.on_context.borrow().clone();
+                    if let Some(handler) = handler {
+                        handler(&view, x, y);
+                    }
+                }
+            ));
+            view.add_controller(gesture);
+        }
+
+        // Folder tree: selecting a folder shows it in this pane.
         let weak = self.downgrade();
-        let drop = gtk::DropTarget::new(
-            gdk::FileList::static_type(),
-            gdk::DragAction::COPY | gdk::DragAction::MOVE,
-        );
-        drop.connect_drop(move |target, value, _, _| {
-            let Some(pane) = Pane::upgrade(&weak) else {
-                return false;
-            };
-            let Ok(list) = value.get::<gdk::FileList>() else {
-                return false;
-            };
-            let paths: Vec<PathBuf> = list.files().iter().filter_map(|f| f.path()).collect();
-            let handler = pane.0.on_drop.borrow().clone();
-            let (Some(handler), false) = (handler, paths.is_empty()) else {
-                return false;
-            };
-            let state = target.current_event_state();
-            let forced = if state.contains(gdk::ModifierType::CONTROL_MASK) {
-                Some(Operation::Copy)
-            } else if state.contains(gdk::ModifierType::SHIFT_MASK) {
-                Some(Operation::Move)
-            } else {
-                None
-            };
-            handler(paths, forced);
-            true
-        });
-        self.0.view.add_controller(drop);
+        self.0
+            .tree_selection
+            .connect_selected_item_notify(move |selection| {
+                let Some(pane) = Pane::upgrade(&weak) else {
+                    return;
+                };
+                if pane.0.tree_syncing.get() {
+                    return;
+                }
+                let path = selection
+                    .selected_item()
+                    .and_downcast::<gtk::TreeListRow>()
+                    .and_then(|row| row.item())
+                    .and_then(|obj| tree_path(&obj));
+                if let Some(path) = path
+                    && pane.cwd().as_deref() != Some(path.as_path())
+                {
+                    pane.navigate(path, None);
+                }
+            });
     }
 
     fn activate(&self, pos: u32) {
@@ -567,18 +889,26 @@ impl Pane {
         let changed_dir = self.cwd().as_deref() != Some(path.as_path());
         let previous_pos = self.0.selection.selected();
 
-        // A reload of the same directory keeps marks; entering a new one starts clean.
-        let marked: HashSet<OsString> = if changed_dir {
-            HashSet::new()
-        } else {
-            self.0
-                .store
-                .iter::<Item>()
-                .flatten()
-                .filter(|item| item.marked())
-                .map(|item| item.row().entry.name.clone())
-                .collect()
-        };
+        // A reload of the same directory keeps marks and computed sizes; entering
+        // a new one starts clean.
+        let (marked, sizes): (HashSet<OsString>, std::collections::HashMap<OsString, i64>) =
+            if changed_dir {
+                Default::default()
+            } else {
+                let items: Vec<Item> = self.0.store.iter::<Item>().flatten().collect();
+                (
+                    items
+                        .iter()
+                        .filter(|i| i.marked())
+                        .map(|i| i.row().entry.name.clone())
+                        .collect(),
+                    items
+                        .iter()
+                        .filter(|i| i.computed_size() >= 0)
+                        .map(|i| (i.row().entry.name.clone(), i.computed_size()))
+                        .collect(),
+                )
+            };
 
         let mut objects = Vec::with_capacity(rows.len() + 1);
         if path.parent().is_some() {
@@ -588,6 +918,9 @@ impl Pane {
             let item = Item::new(row);
             if marked.contains(&item.row().entry.name) {
                 item.set_marked(true);
+            }
+            if let Some(&size) = sizes.get(&item.row().entry.name) {
+                item.set_computed_size(size);
             }
             item
         }));
@@ -607,6 +940,9 @@ impl Pane {
                 }
                 self.0.history_pos.set(history.len() - 1);
             }
+            if self.0.tree_scroller.is_visible() {
+                self.sync_tree();
+            }
         }
         self.0.status.remove_css_class("error");
         self.update_status();
@@ -616,6 +952,42 @@ impl Pane {
             let pos = if changed_dir { 0 } else { previous_pos };
             self.select_pos(pos.min(self.0.selection.n_items().saturating_sub(1)));
         }
+    }
+
+    /// Expand the tree down to the current folder and select it (one-way sync).
+    fn sync_tree(&self) {
+        let Some(cwd) = self.cwd() else {
+            return;
+        };
+        let Some(model) = self
+            .0
+            .tree_selection
+            .model()
+            .and_downcast::<gtk::TreeListModel>()
+        else {
+            return;
+        };
+        self.0.tree_syncing.set(true);
+        // Walk row by row: expand any ancestor of cwd, stop at cwd itself.
+        let mut i = 0;
+        while let Some(row) = model.row(i) {
+            let Some(path) = row.item().and_then(|o| tree_path(&o)) else {
+                i += 1;
+                continue;
+            };
+            if path == cwd {
+                self.0.tree_selection.set_selected(i);
+                self.0
+                    .tree_view
+                    .scroll_to(i, gtk::ListScrollFlags::NONE, None::<gtk::ScrollInfo>);
+                break;
+            }
+            if cwd.starts_with(&path) && row.is_expandable() && !row.is_expanded() {
+                row.set_expanded(true);
+            }
+            i += 1;
+        }
+        self.0.tree_syncing.set(false);
     }
 
     fn show_error(&self, message: &str) {
@@ -679,12 +1051,16 @@ impl Pane {
         if pos >= self.0.selection.n_items() {
             return;
         }
-        self.0.view.scroll_to(
-            pos,
-            None::<&gtk::ColumnViewColumn>,
-            gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
-            None::<gtk::ScrollInfo>,
-        );
+        let flags = gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT;
+        match self.0.view_mode.get() {
+            ViewMode::Details => self.0.view.scroll_to(
+                pos,
+                None::<&gtk::ColumnViewColumn>,
+                flags,
+                None::<gtk::ScrollInfo>,
+            ),
+            _ => self.0.grid.scroll_to(pos, flags, None::<gtk::ScrollInfo>),
+        }
     }
 
     fn sync_path_entry(&self) {
@@ -696,6 +1072,9 @@ impl Pane {
     }
 
     fn update_status(&self) {
+        if self.quick_search_active() {
+            return;
+        }
         let (mut dirs, mut files, mut bytes, mut hidden) = (0u32, 0u32, 0u64, 0u32);
         let (mut marked, mut marked_bytes) = (0u32, 0u64);
         for item in self.0.store.iter::<Item>().flatten() {
@@ -707,15 +1086,21 @@ impl Pane {
                 hidden += 1;
                 continue;
             }
+            let size = if row.entry.is_dir_like() && item.computed_size() < 0 {
+                0
+            } else {
+                item.effective_size()
+            };
             if item.marked() {
                 marked += 1;
-                marked_bytes += row.entry.size;
+                marked_bytes += size;
             }
             if row.entry.is_dir_like() {
                 dirs += 1;
+                bytes += size;
             } else {
                 files += 1;
-                bytes += row.entry.size;
+                bytes += size;
             }
         }
         let mut text = String::new();
@@ -755,6 +1140,15 @@ fn list_item(obj: &glib::Object) -> &gtk::ListItem {
     obj.downcast_ref().expect("factory items are ListItems")
 }
 
+/// Expression yielding the `Item` bound to a ListItem (re-evaluates on rebind).
+fn item_expression(item: &gtk::ListItem) -> gtk::PropertyExpression {
+    gtk::PropertyExpression::new(
+        gtk::ListItem::static_type(),
+        Some(&gtk::ConstantExpression::new(item)),
+        "item",
+    )
+}
+
 /// Keeps `widget`'s CSS classes in sync with the bound item's `marked` flag:
 /// `base` classes always, plus `marked` while the item is marked. Done once at
 /// setup via an expression on the ListItem, so rebinding to another item is automatic.
@@ -763,12 +1157,8 @@ fn bind_marked_class(
     widget: &impl IsA<gtk::Widget>,
     base: &'static [&'static str],
 ) {
-    let item_expr = gtk::PropertyExpression::new(
-        gtk::ListItem::static_type(),
-        Some(&gtk::ConstantExpression::new(item)),
-        "item",
-    );
-    let marked_expr = gtk::PropertyExpression::new(Item::static_type(), Some(&item_expr), "marked");
+    let marked_expr =
+        gtk::PropertyExpression::new(Item::static_type(), Some(&item_expression(item)), "marked");
     let classes = gtk::ClosureExpression::new::<glib::StrV>(
         [&marked_expr],
         glib::closure!(move |_: Option<glib::Object>, marked: bool| {
@@ -785,14 +1175,16 @@ fn bind_marked_class(
 
 /// Lets a cell start a drag of its row: the marked set if the row is marked,
 /// otherwise just this row. Files travel as `text/uri-list`, so Nautilus and
-/// other GTK apps accept them too.
-fn attach_drag(weak: Weak<Inner>, item: &gtk::ListItem, widget: &impl IsA<gtk::Widget>) {
+/// other GTK apps accept them too. Right-click on a cell moves the cursor there
+/// before the view-level gesture opens the menu.
+fn attach_cell_gestures(weak: Weak<Inner>, item: &gtk::ListItem, widget: &impl IsA<gtk::Widget>) {
     let source = gtk::DragSource::new();
     source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
-    let item = item.clone();
+    let drag_item = item.clone();
+    let drag_weak = weak.clone();
     source.connect_prepare(move |_, _, _| {
-        let pane = Pane::upgrade(&weak)?;
-        let obj = item.item()?;
+        let pane = Pane::upgrade(&drag_weak)?;
+        let obj = drag_item.item()?;
         let row = row_of(&obj);
         if row.is_parent {
             return None;
@@ -818,6 +1210,17 @@ fn attach_drag(weak: Weak<Inner>, item: &gtk::ListItem, widget: &impl IsA<gtk::W
         source.set_icon(Some(&paintable), 0, 0);
     });
     widget.add_controller(source);
+
+    let gesture = gtk::GestureClick::builder()
+        .button(gdk::BUTTON_SECONDARY)
+        .build();
+    let item = item.clone();
+    gesture.connect_pressed(move |_, _, _, _| {
+        if let Some(pane) = Pane::upgrade(&weak) {
+            pane.select_pos(item.position());
+        }
+    });
+    widget.add_controller(gesture);
 }
 
 fn add_column(
@@ -825,13 +1228,16 @@ fn add_column(
     title: &str,
     expand: bool,
     factory: gtk::SignalListItemFactory,
-    cmp: impl Fn(&Row, &Row) -> Ordering + 'static,
+    cmp: impl Fn(&Item, &Item) -> Ordering + 'static,
 ) -> gtk::ColumnViewColumn {
     let column = gtk::ColumnViewColumn::new(Some(title), Some(factory));
     column.set_expand(expand);
     column.set_resizable(true);
     column.set_sorter(Some(&gtk::CustomSorter::new(move |a, b| {
-        cmp(row_of(a), row_of(b)).into()
+        let (Some(a), Some(b)) = (a.downcast_ref::<Item>(), b.downcast_ref::<Item>()) else {
+            return gtk::Ordering::Equal;
+        };
+        cmp(a, b).into()
     })));
     view.append_column(&column);
     column
@@ -847,7 +1253,7 @@ fn text_factory(
         let item = list_item(item);
         let label = gtk::Label::builder().xalign(xalign).build();
         bind_marked_class(item, &label, &["numeric"]);
-        attach_drag(weak.clone(), item, &label);
+        attach_cell_gestures(weak.clone(), item, &label);
         item.set_child(Some(&label));
     });
     factory.connect_bind(move |_, item| {
@@ -858,6 +1264,34 @@ fn text_factory(
             .expect("label child");
         let obj = item.item().expect("bound item");
         label.set_text(&text(row_of(&obj)));
+    });
+    factory
+}
+
+/// Size column: shows the entry size, or the computed folder size once known
+/// (bound through an expression so it updates live).
+fn size_factory(weak: Weak<Inner>) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(move |_, item| {
+        let item = list_item(item);
+        let label = gtk::Label::builder().xalign(1.0).build();
+        bind_marked_class(item, &label, &["numeric"]);
+        attach_cell_gestures(weak.clone(), item, &label);
+        let item_expr = item_expression(item);
+        let size_expr =
+            gtk::PropertyExpression::new(Item::static_type(), Some(&item_expr), "computed-size");
+        let text = gtk::ClosureExpression::new::<String>(
+            [item_expr.upcast(), size_expr.upcast()],
+            glib::closure!(|_: Option<glib::Object>, item: Option<Item>, size: i64| {
+                match item {
+                    Some(_) if size >= 0 => human_size(size as u64),
+                    Some(item) => item.row().size_text(),
+                    None => String::new(),
+                }
+            }),
+        );
+        text.bind(&label, "label", Some(&label));
+        item.set_child(Some(&label));
     });
     factory
 }
@@ -876,7 +1310,7 @@ fn name_factory(weak: Weak<Inner>) -> gtk::SignalListItemFactory {
         cell.append(&icon);
         cell.append(&label);
         bind_marked_class(item, &cell, &[]);
-        attach_drag(weak.clone(), item, &cell);
+        attach_cell_gestures(weak.clone(), item, &cell);
         item.set_child(Some(&cell));
     });
     factory.connect_bind(|_, item| {
@@ -901,4 +1335,234 @@ fn name_factory(weak: Weak<Inner>) -> gtk::SignalListItemFactory {
         }
     });
     factory
+}
+
+/// Cells for the list and thumbnails views: icon + name, laid out horizontally
+/// (list) or stacked under a large icon / image thumbnail (thumbnails).
+fn grid_factory(weak: Weak<Inner>, mode: Rc<Cell<ViewMode>>) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    let setup_mode = mode.clone();
+    let setup_weak = weak.clone();
+    factory.connect_setup(move |_, item| {
+        let item = list_item(item);
+        let thumbs = setup_mode.get() == ViewMode::Thumbnails;
+        let icon = gtk::Image::new();
+        icon.set_pixel_size(if thumbs { THUMBNAIL_SIZE } else { 16 });
+        let label = gtk::Label::builder()
+            .xalign(if thumbs { 0.5 } else { 0.0 })
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .lines(if thumbs { 2 } else { 1 })
+            .wrap(thumbs)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .max_width_chars(if thumbs { 14 } else { 18 })
+            .build();
+        let cell = gtk::Box::new(
+            if thumbs {
+                gtk::Orientation::Vertical
+            } else {
+                gtk::Orientation::Horizontal
+            },
+            4,
+        );
+        cell.append(&icon);
+        cell.append(&label);
+        bind_marked_class(item, &cell, &[]);
+        attach_cell_gestures(setup_weak.clone(), item, &cell);
+        item.set_child(Some(&cell));
+    });
+    factory.connect_bind(move |_, item| {
+        let item = list_item(item);
+        let cell = item.child().and_downcast::<gtk::Box>().expect("box child");
+        let icon = cell
+            .first_child()
+            .and_downcast::<gtk::Image>()
+            .expect("icon");
+        let label = cell
+            .last_child()
+            .and_downcast::<gtk::Label>()
+            .expect("label");
+        let obj = item.item().expect("bound item");
+        let row = row_of(&obj);
+        label.set_text(&row.display_name);
+        icon.set_from_gicon(&row.icon());
+        if mode.get() != ViewMode::Thumbnails || row.is_parent || row.entry.is_dir_like() {
+            return;
+        }
+        let Some(fc_item) = obj.downcast_ref::<Item>() else {
+            return;
+        };
+        if let Some(texture) = fc_item.thumbnail() {
+            icon.set_paintable(Some(&texture));
+            return;
+        }
+        let (content_type, _) = gio::content_type_guess(Some(&row.display_name), None);
+        if !content_type.starts_with("image/") {
+            return;
+        }
+        let Some(pane) = Pane::upgrade(&weak) else {
+            return;
+        };
+        let Some(path) = pane.cwd().map(|d| d.join(&row.entry.name)) else {
+            return;
+        };
+        let target = obj.clone();
+        glib::spawn_future_local(glib::clone!(
+            #[weak]
+            item,
+            #[weak]
+            icon,
+            async move {
+                // Pixbuf isn't Send: decode on the worker, ship raw pixels back.
+                let decoded = gio::spawn_blocking(move || {
+                    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(
+                        &path,
+                        THUMBNAIL_SIZE,
+                        THUMBNAIL_SIZE,
+                        true,
+                    )
+                    .ok()?;
+                    Some((
+                        pixbuf.width(),
+                        pixbuf.height(),
+                        pixbuf.rowstride() as usize,
+                        pixbuf.has_alpha(),
+                        pixbuf.read_pixel_bytes(),
+                    ))
+                })
+                .await
+                .ok()
+                .flatten();
+                let Some((width, height, stride, has_alpha, bytes)) = decoded else {
+                    return;
+                };
+                let format = if has_alpha {
+                    gdk::MemoryFormat::R8g8b8a8
+                } else {
+                    gdk::MemoryFormat::R8g8b8
+                };
+                let texture: gdk::Texture =
+                    gdk::MemoryTexture::new(width, height, format, &bytes, stride).upcast();
+                if let Some(fc_item) = target.downcast_ref::<Item>() {
+                    fc_item.set_thumbnail(Some(texture.clone()));
+                }
+                // Only paint if this cell still shows the same item.
+                if item.item().as_ref() == Some(&target) {
+                    icon.set_paintable(Some(&texture));
+                }
+            }
+        ));
+    });
+    factory
+}
+
+// ---- folder tree -----------------------------------------------------------------
+
+fn tree_path(obj: &glib::Object) -> Option<PathBuf> {
+    obj.downcast_ref::<glib::BoxedAnyObject>()
+        .map(|b| b.borrow::<PathBuf>().clone())
+}
+
+fn subdirs(dir: &Path, show_hidden: bool) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter(|e| show_hidden || !e.file_name().as_encoded_bytes().starts_with(b"."))
+        .map(|e| (name_key(&e.file_name()), e.path()))
+        .collect();
+    dirs.sort_by(|a, b| natural_cmp(&a.0, &b.0));
+    dirs.into_iter().map(|(_, p)| p).collect()
+}
+
+fn build_tree(
+    weak: Weak<Inner>,
+    show_hidden: Rc<Cell<bool>>,
+) -> (gtk::ScrolledWindow, gtk::ListView, gtk::SingleSelection) {
+    let roots = gio::ListStore::new::<glib::BoxedAnyObject>();
+    roots.append(&glib::BoxedAnyObject::new(PathBuf::from("/")));
+    roots.append(&glib::BoxedAnyObject::new(glib::home_dir()));
+    let model = gtk::TreeListModel::new(roots, false, false, move |obj| {
+        let path = tree_path(obj)?;
+        let children = subdirs(&path, show_hidden.get());
+        if children.is_empty() {
+            return None;
+        }
+        let store = gio::ListStore::new::<glib::BoxedAnyObject>();
+        for child in children {
+            store.append(&glib::BoxedAnyObject::new(child));
+        }
+        Some(store.upcast())
+    });
+    let selection = gtk::SingleSelection::builder()
+        .model(&model)
+        .autoselect(false)
+        .can_unselect(true)
+        .build();
+
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let item = list_item(item);
+        let expander = gtk::TreeExpander::new();
+        let cell = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        cell.append(&gtk::Image::from_icon_name("folder-symbolic"));
+        let label = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        cell.append(&label);
+        expander.set_child(Some(&cell));
+        item.set_child(Some(&expander));
+    });
+    factory.connect_bind(|_, item| {
+        let item = list_item(item);
+        let expander = item
+            .child()
+            .and_downcast::<gtk::TreeExpander>()
+            .expect("expander");
+        let row = item.item().and_downcast::<gtk::TreeListRow>();
+        expander.set_list_row(row.as_ref());
+        let label = expander
+            .child()
+            .and_then(|c| c.last_child())
+            .and_downcast::<gtk::Label>()
+            .expect("label");
+        let text = row
+            .and_then(|r| r.item())
+            .and_then(|o| tree_path(&o))
+            .map(|p| match p.file_name() {
+                Some(name) => name.to_string_lossy().into_owned(),
+                None => "/".to_owned(),
+            })
+            .unwrap_or_default();
+        label.set_text(&text);
+    });
+
+    let view = gtk::ListView::new(Some(selection.clone()), Some(factory));
+    view.add_css_class("navigation-sidebar");
+    view.add_css_class("folder-tree");
+    // Enter/double-click on a tree row navigates too (selection already did, but
+    // this also covers re-activating the selected row after the pane moved on).
+    let weak_for_activate = weak;
+    view.connect_activate(move |view, pos| {
+        let Some(pane) = Pane::upgrade(&weak_for_activate) else {
+            return;
+        };
+        let path = view
+            .model()
+            .and_then(|m| m.item(pos))
+            .and_downcast::<gtk::TreeListRow>()
+            .and_then(|r| r.item())
+            .and_then(|o| tree_path(&o));
+        if let Some(path) = path {
+            pane.navigate(path, None);
+        }
+    });
+    let scroller = gtk::ScrolledWindow::builder()
+        .child(&view)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .visible(false)
+        .build();
+    (scroller, view, selection)
 }

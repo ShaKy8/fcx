@@ -7,3 +7,4 @@ pub mod glob;
 pub mod jobs;
 pub mod keymap;
 pub mod sort;
+pub mod users;

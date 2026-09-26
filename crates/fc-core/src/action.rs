@@ -38,6 +38,9 @@ actions! {
     SameFolderBoth => "same-folder-both", "Same folder in both panes";
     SwapPanes => "swap-panes", "Swap panes";
     OpenTerminal => "open-terminal", "Open terminal here";
+    ToggleTree => "toggle-tree", "Folder tree";
+    CalcSize => "calc-size", "Calculate folder size";
+    CalcSizeAll => "calc-size-all", "Calculate all folder sizes";
     // marks
     ToggleMark => "toggle-mark", "Toggle mark";
     MarkAndDown => "mark-and-down", "Toggle mark and move down";
@@ -64,6 +67,11 @@ actions! {
     SortBySize => "sort-by-size", "Sort by size";
     SortByDate => "sort-by-date", "Sort by date";
     // file operations
+    Open => "open", "Open";
+    OpenWith => "open-with", "Open with…";
+    Properties => "properties", "Properties…";
+    ChangeAttributes => "change-attributes", "Change date and attributes…";
+    ContextMenu => "context-menu", "Context menu";
     View => "view", "View";
     Edit => "edit", "Edit";
     Copy => "copy", "Copy…";
@@ -74,6 +82,10 @@ actions! {
     DeletePermanent => "delete-permanent", "Delete permanently";
     Rename => "rename", "Rename…";
     // view
+    ViewList => "view-list", "List view";
+    ViewDetails => "view-details", "Details view";
+    ViewThumbnails => "view-thumbnails", "Thumbnails view";
+    ViewCycle => "view-cycle", "Toggle view";
     ToggleSplitOrientation => "toggle-split-orientation", "Horizontal / vertical split";
     ToggleSinglePane => "toggle-single-pane", "Dual / single pane";
     ToggleFullscreen => "toggle-fullscreen", "Full screen";
