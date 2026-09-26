@@ -59,7 +59,15 @@ Append to `~/.config/hypr/bindings.lua`:
 
 ```lua
 hl.unbind("SUPER + SHIFT + F")
-o.bind("SUPER + SHIFT + F", "File manager", "fcx")
+o.bind("SUPER + SHIFT + F", "File manager", "setsid uwsm-app -- fcx")
+hl.unbind("SUPER + ALT + SHIFT + F")
+o.bind("SUPER + ALT + SHIFT + F", "File manager (cwd)", "setsid uwsm-app -- fcx \"$(omarchy-cmd-terminal-cwd)\"")
+```
+
+To make it the default handler for folders (what other apps open on "show in folder"):
+
+```sh
+xdg-mime default fcx.desktop inode/directory
 ```
 
 ## Keys

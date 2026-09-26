@@ -16,7 +16,7 @@ mod sync;
 mod theme;
 mod viewer;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fc_core::keymap::Keymap;
 use gtk::prelude::*;
@@ -64,8 +64,14 @@ fn main() -> glib::ExitCode {
         println!("fcx {}", env!("CARGO_PKG_VERSION"));
         return glib::ExitCode::SUCCESS;
     }
-    let mut args = raw.iter().map(PathBuf::from);
-    let explicit = !raw.is_empty();
+    // Empty or non-folder arguments (e.g. a cwd helper that found no terminal) are
+    // ignored, so `fcx ""` behaves like plain `fcx` and restores the session.
+    let mut args = raw
+        .iter()
+        .filter(|a| !a.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir());
+    let explicit = raw.iter().any(|a| !a.is_empty() && Path::new(a).is_dir());
     let left = args
         .next()
         .and_then(|p| std::path::absolute(p).ok())
