@@ -1,0 +1,22 @@
+pkgbase = fcx-git
+	pkgdesc = FreeCommander-style dual-pane file manager for Omarchy (Rust + GTK4)
+	pkgver = 0.1.0.r21.g555eab6
+	pkgrel = 1
+	url = https://github.com/ShaKy8/fcx
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-or-later
+	makedepends = git
+	makedepends = cargo
+	makedepends = pkgconf
+	depends = gtk4
+	depends = libarchive
+	depends = glib2
+	depends = xdg-terminal-exec
+	optdepends = omarchy: themed colours via ~/.config/omarchy/themed/fcx.css.tpl
+	provides = fcx
+	conflicts = fcx
+	source = fcx-git::git+https://github.com/ShaKy8/fcx.git
+	sha256sums = SKIP
+
+pkgname = fcx-git
