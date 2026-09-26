@@ -10,6 +10,7 @@ mod props;
 mod row;
 mod search;
 mod sync;
+mod theme;
 mod viewer;
 
 use std::path::PathBuf;
@@ -20,7 +21,7 @@ use gtk::{Application, gdk, glib};
 
 use crate::app::App;
 
-const APP_ID: &str = "org.omarchy.fc";
+const APP_ID: &str = "org.omarchy.fcx";
 
 const CSS: &str = "
 .marked { color: @theme_selected_bg_color; font-weight: bold; }
@@ -45,7 +46,7 @@ const CSS: &str = "
 ";
 
 fn main() -> glib::ExitCode {
-    // `fc [LEFT [RIGHT]]`: parsed by hand; GApplication would reject unknown arguments.
+    // `fcx [LEFT [RIGHT]]`: parsed by hand; GApplication would reject unknown arguments.
     let mut args = std::env::args_os().skip(1).map(PathBuf::from);
     let left = args
         .next()
@@ -77,17 +78,18 @@ fn install_css() {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+    theme::install();
 }
 
 /// Defaults layered with `~/.config/fc/keymap.toml` when present. A broken user
 /// file is reported on stderr and ignored rather than leaving the app unusable.
 fn load_keymap() -> Keymap {
     let mut keymap = Keymap::defaults();
-    let path = glib::user_config_dir().join("fc").join("keymap.toml");
+    let path = glib::user_config_dir().join("fcx").join("keymap.toml");
     if let Ok(text) = std::fs::read_to_string(&path)
         && let Err(err) = keymap.merge_toml(&text)
     {
-        eprintln!("fc: ignoring {}: {err}", path.display());
+        eprintln!("fcx: ignoring {}: {err}", path.display());
         keymap = Keymap::defaults();
     }
     keymap

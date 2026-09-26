@@ -58,7 +58,7 @@ impl App {
     pub fn new(gtk_app: &gtk::Application, start: [PathBuf; 2], keymap: Keymap) -> Rc<Self> {
         let window = gtk::ApplicationWindow::builder()
             .application(gtk_app)
-            .title("fc")
+            .title("fcx")
             .default_width(1200)
             .default_height(760)
             .show_menubar(false)
@@ -582,7 +582,7 @@ impl App {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let dir = glib::user_cache_dir()
-            .join("fc")
+            .join("fcx")
             .join("archives")
             .join(format!("{name}-{key:016x}"));
         let done_marker = dir.join(".fc-complete");

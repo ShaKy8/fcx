@@ -1,6 +1,6 @@
 # Default fc keybindings, following FreeCommander XE's defaults
 # (https://freecommander.com/fchelpxe/en/Keyboardshortcuts.html). Copy to
-# ~/.config/fc/keymap.toml and change what you like; your file is layered over
+# ~/.config/fcx/keymap.toml and change what you like; your file is layered over
 # these defaults. Bind a chord to "none" to remove it.
 #
 # Chords are modifier names joined with "+", then a key name: Ctrl, Shift, Alt, Super.

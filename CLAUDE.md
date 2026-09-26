@@ -3,12 +3,12 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is
-`fc` is a FreeCommander-style dual-pane file manager built in Rust + GTK4 for Omarchy Linux (Arch, Hyprland, Wayland), licensed GPL-3.0-or-later and meant to ship via the AUR. The full design and build order lives in the approved plan at `~/.claude/plans/pasted-content-id-4341-i-m-planning-binary-patterson.md`; follow its step sequence (panes → keymap/selection → tabs/favorites → job engine → multi-rename → search → compare → viewer/archives → Omarchy packaging).
+`fcx` (crates `fc-core` + `fc-gtk`) is a FreeCommander-style dual-pane file manager built in Rust + GTK4 for Omarchy Linux (Arch, Hyprland, Wayland), licensed GPL-3.0-or-later and meant to ship via the AUR. The full design and build order lives in the approved plan at `~/.claude/plans/pasted-content-id-4341-i-m-planning-binary-patterson.md`; follow its step sequence (panes → keymap/selection → tabs/favorites → job engine → multi-rename → search → compare → viewer/archives → Omarchy packaging).
 
 ## Commands
 ```sh
 cargo build                          # whole workspace
-cargo run -p fc-gtk                  # launch the app (binary is named `fc`)
+cargo run -p fc-gtk                  # launch the app (binary is named `fcx`; `fc` is a shell builtin)
 cargo test -p fc-core                # core tests (no display needed)
 cargo test -p fc-core fs::tests::keeps_non_utf8_names   # single test
 cargo clippy --workspace --all-targets -- -D warnings
@@ -28,12 +28,12 @@ System deps: `rustup` (stable), plus `gtk4` (already installed on Omarchy).
 ## Manual UI testing on this machine
 Drive the real app with synthetic input and screenshots (no PIL available):
 ```sh
-./target/debug/fc /tmp/some/dir /tmp/other &   # G_DEBUG=fatal-criticals to catch GTK criticals
-hyprctl dispatch focuswindow class:org.omarchy.fc
+./target/debug/fcx /tmp/some/dir /tmp/other &   # G_DEBUG=fatal-criticals to catch GTK criticals
+hyprctl dispatch focuswindow class:org.omarchy.fcx
 wtype -k F5; wtype -M alt -k Return -m alt      # keys and chords
-G=$(hyprctl clients -j | jq -r '.[] | select(.class=="org.omarchy.fc") | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"'); grim -g "$G" shot.png
+G=$(hyprctl clients -j | jq -r '.[] | select(.class=="org.omarchy.fcx") | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"'); grim -g "$G" shot.png
 ```
-Caveats: a virtual *lone* Ctrl press is rewritten to Escape by this machine's keyboard remapper (Ctrl+key combos are fine); `grim` hangs while the screen is locked; set `XDG_CONFIG_HOME` to a scratch dir so tests don't touch `~/.config/fc/favorites.toml`; `/tmp` is tmpfs, where GIO cannot trash (the app offers permanent delete instead).
+Caveats: a virtual *lone* Ctrl press is rewritten to Escape by this machine's keyboard remapper (Ctrl+key combos are fine); `grim` hangs while the screen is locked; set `XDG_CONFIG_HOME` (and `XDG_CACHE_HOME` for archives) to a scratch dir so tests don't touch `~/.config/fcx/`; `FCX_THEME_CSS=path` loads a rendered theme CSS for testing; `/tmp` is tmpfs, where GIO cannot trash (the app offers permanent delete instead).
 
 ## Filesystem invariants
 - Filenames are `OsString`/`PathBuf` end to end; convert lossily only at display time.
@@ -44,5 +44,5 @@ Caveats: a virtual *lone* Ctrl press is rewritten to Escape by this machine's ke
 - Multi-rename must use two-phase temp names so swaps/cycles (a↔b) succeed, and must reject collisions before touching disk.
 
 ## Omarchy integration
-- Theming: ship a `*.tpl` for `~/.config/omarchy/themed/`; Omarchy substitutes `{{ background }}`, `{{ foreground }}`, `{{ accent }}`, `{{ color0 }}`…`{{ color15 }}` (plus `_strip`/`_rgb` modifiers) on theme switch and writes output under `~/.local/state/omarchy/current/`. The app should watch the rendered CSS and reload live. Don't use libadwaita — its stylesheet overrides theme colors.
+- Theming: `packaging/omarchy/fcx.css.tpl` is installed to `~/.config/omarchy/themed/`; Omarchy substitutes `{{ background }}`, `{{ foreground }}`, `{{ accent }}`, `{{ muted }}`, `{{ red }}`… (keys of `colors.toml`, plus `_strip`/`_rgb` modifiers) on theme switch and writes `~/.local/state/omarchy/current/theme/fcx.css`. `theme.rs` loads that file at USER priority and reloads it when it changes. Don't use libadwaita — its stylesheet overrides theme colors.
 - The stock file-manager binding (Super+Shift+F → nautilus) is in `/usr/share/omarchy/default/hypr/bindings/applications.lua`; never edit files under `/usr/share/omarchy`, override from the user's config instead.

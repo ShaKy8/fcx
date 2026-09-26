@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=fcx
+GenericName=File Manager
+Comment=FreeCommander-style dual-pane file manager
+Exec=fcx %f
+TryExec=fcx
+Icon=fcx
+Terminal=false
+Categories=System;FileTools;FileManager;Utility;GTK;
+MimeType=inode/directory;
+Keywords=files;folders;commander;dual pane;
+StartupNotify=true
+StartupWMClass=org.omarchy.fcx

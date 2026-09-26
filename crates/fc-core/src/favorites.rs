@@ -28,14 +28,14 @@ pub enum FavoritesError {
 }
 
 impl Favorites {
-    /// `$XDG_CONFIG_HOME/fc/favorites.toml` (or `~/.config/fc/favorites.toml`).
+    /// `$XDG_CONFIG_HOME/fcx/favorites.toml` (or `~/.config/fcx/favorites.toml`).
     pub fn default_path() -> PathBuf {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
             .unwrap_or_else(|| PathBuf::from("."));
-        base.join("fc").join("favorites.toml")
+        base.join("fcx").join("favorites.toml")
     }
 
     /// A missing file is an empty list; a corrupt one is an error.

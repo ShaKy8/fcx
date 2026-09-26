@@ -1,13 +1,13 @@
 [package]
 name = "fc-gtk"
-description = "GTK4 dual-pane file manager for Omarchy"
+description = "fcx: FreeCommander-style dual-pane file manager for Omarchy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "fc"
+name = "fcx"
 path = "src/main.rs"
 
 [dependencies]
