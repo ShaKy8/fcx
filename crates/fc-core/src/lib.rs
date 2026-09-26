@@ -11,4 +11,5 @@ pub mod keymap;
 pub mod rename;
 pub mod search;
 pub mod sort;
+pub mod text;
 pub mod users;

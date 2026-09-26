@@ -55,6 +55,7 @@ type DropHandler = Rc<dyn Fn(Vec<PathBuf>, Option<Operation>)>;
 /// Right-click (or Shift+F10): the widget to anchor a menu on and the position inside it.
 type ContextHandler = Rc<dyn Fn(&gtk::Widget, f64, f64)>;
 type NavigatedHandler = Rc<dyn Fn(&Path)>;
+type CursorHandler = Rc<dyn Fn()>;
 
 #[derive(Clone)]
 pub struct Pane(Rc<Inner>);
@@ -96,6 +97,7 @@ struct Inner {
     on_drop: RefCell<Option<DropHandler>>,
     on_context: RefCell<Option<ContextHandler>>,
     on_navigated: RefCell<Option<NavigatedHandler>>,
+    on_cursor: RefCell<Option<CursorHandler>>,
 }
 
 impl Pane {
@@ -291,6 +293,7 @@ impl Pane {
                 on_drop: RefCell::new(None),
                 on_context: RefCell::new(None),
                 on_navigated: RefCell::new(None),
+                on_cursor: RefCell::new(None),
             }
         }));
         pane.connect_signals();
@@ -331,6 +334,16 @@ impl Pane {
     /// Runs `f` with the new folder after every successful listing.
     pub fn connect_navigated(&self, f: impl Fn(&Path) + 'static) {
         *self.0.on_navigated.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Runs `f` whenever the cursor moves to another item.
+    pub fn connect_cursor_changed(&self, f: impl Fn() + 'static) {
+        *self.0.on_cursor.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Full path of the item under the cursor.
+    pub fn cursor_path(&self) -> Option<PathBuf> {
+        Some(self.cwd()?.join(self.cursor_name()?))
     }
 
     /// Shift+F10: open the context menu near the top of the view.
@@ -937,6 +950,16 @@ impl Pane {
             ));
             view.add_controller(gesture);
         }
+
+        let weak = self.downgrade();
+        self.0.selection.connect_selected_notify(move |_| {
+            if let Some(pane) = Pane::upgrade(&weak) {
+                let handler = pane.0.on_cursor.borrow().clone();
+                if let Some(handler) = handler {
+                    handler();
+                }
+            }
+        });
 
         // Folder tree: selecting a folder shows it in this pane.
         let weak = self.downgrade();

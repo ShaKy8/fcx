@@ -17,6 +17,7 @@ F2 = "rename"                  # with several items marked, opens the multi rena
 "Ctrl+m" = "multi-rename"
 F3 = "view"
 "Shift+F3" = "view"
+"Ctrl+q" = "quick-view"
 F4 = "edit"
 "Shift+F4" = "new-file"
 F5 = "copy"

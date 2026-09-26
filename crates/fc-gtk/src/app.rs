@@ -29,6 +29,7 @@ use crate::pane::{Pane, SortColumn, ViewMode, expand_path};
 use crate::props;
 use crate::search;
 use crate::sync;
+use crate::viewer::{self, Viewer};
 
 pub struct App {
     weak: Weak<App>,
@@ -43,6 +44,9 @@ pub struct App {
     /// Last multi rename, for undo.
     last_rename: RefCell<Option<AppliedRename>>,
     split: gtk::Paned,
+    quick_view: Viewer,
+    /// While the quick view replaces the inactive side, which side it replaced.
+    quick_view_side: Cell<Option<usize>>,
     menu_bar: gtk::PopoverMenuBar,
     toolbar: gtk::Box,
     places: Rc<PlacesBar>,
@@ -101,6 +105,12 @@ impl App {
                             app.show_context_menu(anchor, x, y);
                         }
                     });
+                    let w = weak.clone();
+                    pane.connect_cursor_changed(move || {
+                        if let Some(app) = w.upgrade() {
+                            app.update_quick_view();
+                        }
+                    });
                 })
             };
             let hosts = [host(0), host(1)];
@@ -132,6 +142,8 @@ impl App {
                 keymap,
                 runner,
                 split,
+                quick_view: Viewer::new(),
+                quick_view_side: Cell::new(None),
             }
         });
 
@@ -304,7 +316,8 @@ impl App {
             Action::SortByExt => pane.sort_by(SortColumn::Ext),
             Action::SortBySize => pane.sort_by(SortColumn::Size),
             Action::SortByDate => pane.sort_by(SortColumn::Date),
-            Action::View => self.open_cursor(false),
+            Action::View => self.view_cursor(),
+            Action::QuickView => self.toggle_quick_view(),
             Action::Edit => self.open_cursor(true),
             Action::Copy => self.transfer(Operation::Copy),
             Action::Move => self.transfer(Operation::Move),
@@ -357,6 +370,10 @@ impl App {
     }
 
     fn set_active(&self, index: usize, grab_focus: bool) {
+        // The quick view stands in for the inactive side; never let it become the active one.
+        if self.quick_view_side.get() == Some(index) {
+            self.toggle_quick_view();
+        }
         self.active.set(index);
         for (i, host) in self.hosts.iter().enumerate() {
             host.set_active(i == index);
@@ -1022,7 +1039,64 @@ impl App {
         );
     }
 
-    /// F3/F4: open the cursor item with its default app, or with the default text editor.
+    /// F3: the built-in viewer; on a folder it just enters it.
+    fn view_cursor(&self) {
+        let pane = self.active_pane();
+        let Some(path) = pane.cursor_path() else {
+            return;
+        };
+        if path.is_dir() {
+            pane.navigate(path, None);
+            return;
+        }
+        viewer::window(self.win(), path);
+    }
+
+    /// Ctrl+Q: swap the inactive side for the quick-view panel, or restore it.
+    fn toggle_quick_view(&self) {
+        // Swapping a child resets the split; keep the user's divider where it was.
+        let position = self.split.position();
+        self.swap_quick_view();
+        self.split.set_position(position);
+        self.active_pane().focus();
+    }
+
+    fn swap_quick_view(&self) {
+        match self.quick_view_side.take() {
+            Some(side) => {
+                let host = self.hosts[side].widget();
+                if side == 0 {
+                    self.split.set_start_child(Some(host));
+                } else {
+                    self.split.set_end_child(Some(host));
+                }
+                self.quick_view.clear();
+            }
+            None => {
+                let side = 1 - self.active.get();
+                self.quick_view_side.set(Some(side));
+                let panel = self.quick_view.widget();
+                if side == 0 {
+                    self.split.set_start_child(Some(panel));
+                } else {
+                    self.split.set_end_child(Some(panel));
+                }
+                self.update_quick_view();
+            }
+        }
+    }
+
+    fn update_quick_view(&self) {
+        if self.quick_view_side.get().is_none() {
+            return;
+        }
+        match self.active_pane().cursor_path() {
+            Some(path) if !path.is_dir() => self.quick_view.show_file(path),
+            _ => self.quick_view.clear(),
+        }
+    }
+
+    /// F4: open the cursor item with the default text editor (`editor`), or the default app.
     fn open_cursor(&self, editor: bool) {
         let pane = self.active_pane();
         let (Some(cwd), Some(name)) = (pane.cwd(), pane.cursor_name()) else {

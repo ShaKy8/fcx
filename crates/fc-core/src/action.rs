@@ -89,6 +89,7 @@ actions! {
     ChangeAttributes => "change-attributes", "Change date and attributes…";
     ContextMenu => "context-menu", "Context menu";
     View => "view", "View";
+    QuickView => "quick-view", "Quick view panel";
     Edit => "edit", "Edit";
     Copy => "copy", "Copy…";
     Move => "move", "Move…";
