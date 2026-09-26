@@ -27,11 +27,31 @@ cp packaging/fcx.svg ~/.local/share/icons/hicolor/scalable/apps/
 xdg-mime default fcx.desktop inode/directory      # optional: make it the folder handler
 ```
 
-As a package (from this checkout):
+As a package from this checkout:
 
 ```sh
 cd packaging && makepkg -si
 ```
+
+From the AUR-style recipe, which clones GitHub instead (`packaging/aur/`):
+
+```sh
+cd packaging/aur && makepkg -si
+```
+
+### Publishing to the AUR
+
+`packaging/aur/` holds the `fcx-git` PKGBUILD and its generated `.SRCINFO`.
+To publish or update the AUR package:
+
+```sh
+git clone ssh://aur@aur.archlinux.org/fcx-git.git   # first time; needs an AUR account + SSH key
+cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO fcx-git/
+cd fcx-git && git add PKGBUILD .SRCINFO && git commit -m "Update to $(grep pkgver= PKGBUILD)" && git push
+```
+
+After changing the PKGBUILD, regenerate `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`
+(never edit it by hand).
 
 ### Omarchy theme colours
 

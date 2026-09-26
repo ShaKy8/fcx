@@ -1,0 +1,45 @@
+# Maintainer: Kyle Shaver (ShaKy8) <kbshaver@gmail.com>
+pkgname=fcx-git
+pkgver=0.1.0.r20.g3537269
+pkgrel=1
+pkgdesc="FreeCommander-style dual-pane file manager for Omarchy (Rust + GTK4)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/ShaKy8/fcx"
+license=('GPL-3.0-or-later')
+depends=('gtk4' 'libarchive' 'glib2' 'xdg-terminal-exec')
+makedepends=('git' 'cargo' 'pkgconf')
+optdepends=('omarchy: themed colours via ~/.config/omarchy/themed/fcx.css.tpl')
+provides=('fcx')
+conflicts=('fcx')
+source=("$pkgname::git+https://github.com/ShaKy8/fcx.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  printf "0.1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$pkgname"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p fc-gtk
+}
+
+check() {
+  cd "$pkgname"
+  cargo test --frozen --release -p fc-core
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm755 target/release/fcx "$pkgdir/usr/bin/fcx"
+  install -Dm644 packaging/fcx.desktop "$pkgdir/usr/share/applications/fcx.desktop"
+  install -Dm644 packaging/fcx.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/fcx.svg"
+  install -Dm644 packaging/omarchy/fcx.css.tpl "$pkgdir/usr/share/fcx/omarchy/fcx.css.tpl"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
