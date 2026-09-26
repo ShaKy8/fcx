@@ -1,6 +1,7 @@
 //! Core logic for fc. This crate must never depend on GTK so it stays unit-testable.
 
 pub mod action;
+pub mod archive;
 pub mod compare;
 pub mod favorites;
 pub mod format;

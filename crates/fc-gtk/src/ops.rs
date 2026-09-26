@@ -716,6 +716,63 @@ impl JobRunner {
     }
 }
 
+impl JobRunner {
+    /// Run blocking `work` on a thread with an indeterminate progress row
+    /// (archives have no byte-level progress). `on_done` gets the result.
+    pub fn run_task(
+        &self,
+        title: String,
+        work: impl FnOnce() -> Result<(), String> + Send + 'static,
+        on_done: impl FnOnce(Result<(), String>) + 'static,
+    ) {
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(3)
+            .margin_top(6)
+            .margin_bottom(6)
+            .margin_start(8)
+            .margin_end(8)
+            .build();
+        let label = gtk::Label::builder()
+            .label(&title)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .build();
+        let bar = gtk::ProgressBar::new();
+        row.append(&label);
+        row.append(&bar);
+        self.0.panel.append(&row);
+        self.0.panel.set_visible(true);
+        let pulse = glib::timeout_add_local(
+            Duration::from_millis(120),
+            glib::clone!(
+                #[weak]
+                bar,
+                #[upgrade_or]
+                glib::ControlFlow::Break,
+                move || {
+                    bar.pulse();
+                    glib::ControlFlow::Continue
+                }
+            ),
+        );
+        let weak = Rc::downgrade(&self.0);
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(work)
+                .await
+                .unwrap_or_else(|_| Err("task thread panicked".into()));
+            pulse.remove();
+            if let Some(inner) = weak.upgrade() {
+                inner.panel.remove(&row);
+                if inner.panel.first_child().is_none() {
+                    inner.panel.set_visible(false);
+                }
+            }
+            on_done(result);
+        });
+    }
+}
+
 pub fn verb(op: Operation) -> &'static str {
     match op {
         Operation::Copy => "Copy",

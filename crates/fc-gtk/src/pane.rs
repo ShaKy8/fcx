@@ -56,6 +56,8 @@ type DropHandler = Rc<dyn Fn(Vec<PathBuf>, Option<Operation>)>;
 type ContextHandler = Rc<dyn Fn(&gtk::Widget, f64, f64)>;
 type NavigatedHandler = Rc<dyn Fn(&Path)>;
 type CursorHandler = Rc<dyn Fn()>;
+/// Returns true if it handled opening the file (e.g. browsed into an archive).
+type ActivateFileHandler = Rc<dyn Fn(&Path) -> bool>;
 
 #[derive(Clone)]
 pub struct Pane(Rc<Inner>);
@@ -98,6 +100,9 @@ struct Inner {
     on_context: RefCell<Option<ContextHandler>>,
     on_navigated: RefCell<Option<NavigatedHandler>>,
     on_cursor: RefCell<Option<CursorHandler>>,
+    on_activate_file: RefCell<Option<ActivateFileHandler>>,
+    /// Folders that stand in for archives: leaving one goes back to the archive.
+    virtual_parents: RefCell<std::collections::HashMap<PathBuf, (PathBuf, OsString)>>,
 }
 
 impl Pane {
@@ -294,6 +299,8 @@ impl Pane {
                 on_context: RefCell::new(None),
                 on_navigated: RefCell::new(None),
                 on_cursor: RefCell::new(None),
+                on_activate_file: RefCell::new(None),
+                virtual_parents: RefCell::new(Default::default()),
             }
         }));
         pane.connect_signals();
@@ -334,6 +341,11 @@ impl Pane {
     /// Runs `f` with the new folder after every successful listing.
     pub fn connect_navigated(&self, f: impl Fn(&Path) + 'static) {
         *self.0.on_navigated.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Runs `f` before a file is opened with its default app; `true` means handled.
+    pub fn connect_activate_file(&self, f: impl Fn(&Path) -> bool + 'static) {
+        *self.0.on_activate_file.borrow_mut() = Some(Rc::new(f));
     }
 
     /// Runs `f` whenever the cursor moves to another item.
@@ -443,10 +455,24 @@ impl Pane {
         });
     }
 
+    /// When `folder` (an unpacked archive) is left with Backspace, show
+    /// `parent` with the cursor on `archive` instead of the cache directory.
+    pub fn add_virtual_parent(&self, folder: PathBuf, parent: PathBuf, archive: OsString) {
+        self.0
+            .virtual_parents
+            .borrow_mut()
+            .insert(folder, (parent, archive));
+    }
+
     pub fn go_up(&self) {
         let Some(cwd) = self.cwd() else {
             return;
         };
+        let virtual_parent = self.0.virtual_parents.borrow().get(&cwd).cloned();
+        if let Some((parent, archive)) = virtual_parent {
+            self.navigate(parent, Some(archive));
+            return;
+        }
         if let Some(parent) = cwd.parent() {
             self.navigate(
                 parent.to_path_buf(),
@@ -998,7 +1024,12 @@ impl Pane {
         } else if row.entry.is_dir_like() {
             self.navigate(cwd.join(&row.entry.name), None);
         } else {
-            self.open_file(&cwd.join(&row.entry.name));
+            let path = cwd.join(&row.entry.name);
+            let handler = self.0.on_activate_file.borrow().clone();
+            if handler.is_some_and(|h| h(&path)) {
+                return;
+            }
+            self.open_file(&path);
         }
     }
 

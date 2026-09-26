@@ -11,6 +11,7 @@ use std::process::Command;
 use std::rc::{Rc, Weak};
 
 use fc_core::action::Action;
+use fc_core::archive;
 use fc_core::compare::{self, Options as CompareOptions, Status, SyncAction};
 use fc_core::favorites::Favorites;
 use fc_core::glob::Mask;
@@ -110,6 +111,17 @@ impl App {
                         if let Some(app) = w.upgrade() {
                             app.update_quick_view();
                         }
+                    });
+                    let w = weak.clone();
+                    pane.connect_activate_file(move |path| {
+                        let Some(app) = w.upgrade() else {
+                            return false;
+                        };
+                        let is_archive = path.file_name().is_some_and(archive::is_archive);
+                        if is_archive {
+                            app.open_archive(path.to_path_buf());
+                        }
+                        is_archive
                     });
                 })
             };
@@ -280,6 +292,15 @@ impl App {
             Action::FavoritesMenu => favorites::popup(&pane.view_widget(), &self.favorites_menu),
             Action::OpenTerminal => self.open_terminal(),
             Action::Search => self.search(),
+            Action::OpenArchive => {
+                if let Some(path) = pane.cursor_path()
+                    && path.file_name().is_some_and(archive::is_archive)
+                {
+                    self.open_archive(path);
+                }
+            }
+            Action::Extract => self.extract(),
+            Action::Pack => self.pack(),
             Action::QuickFilter => pane.toggle_quick_filter(),
             Action::CompareFolders => self.compare_folders(),
             Action::SyncFolders => self.sync_folders(),
@@ -532,6 +553,217 @@ impl App {
                 app.window.present();
             }
         });
+    }
+
+    // ---- archives ------------------------------------------------------------
+
+    /// Browse an archive: unpack it once into the cache and enter that folder.
+    fn open_archive(&self, path: PathBuf) {
+        let Ok(meta) = fs::metadata(&path) else {
+            return;
+        };
+        // Cache key: path + size + mtime, so a changed archive is unpacked again.
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            path.hash(&mut h);
+            meta.len().hash(&mut h);
+            mtime.hash(&mut h);
+            h.finish()
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let dir = glib::user_cache_dir()
+            .join("fc")
+            .join("archives")
+            .join(format!("{name}-{key:016x}"));
+        let done_marker = dir.join(".fc-complete");
+        let pane = self.active_pane();
+        if let (Some(parent), Some(file)) = (path.parent(), path.file_name()) {
+            pane.add_virtual_parent(dir.clone(), parent.to_path_buf(), file.to_os_string());
+        }
+        if done_marker.exists() {
+            pane.navigate(dir, None);
+            return;
+        }
+        let weak = self.weak.clone();
+        let target = dir.clone();
+        let source = path.clone();
+        self.runner.run_task(
+            format!("Opening {name}"),
+            move || {
+                let _ = fs::remove_dir_all(&target);
+                archive::extract(&source, &target).map_err(|e| e.to_string())?;
+                fs::write(&done_marker, b"").map_err(|e| e.to_string())
+            },
+            move |result| {
+                let Some(app) = weak.upgrade() else {
+                    return;
+                };
+                match result {
+                    Ok(()) => app.active_pane().navigate(dir, None),
+                    Err(err) => ops::alert(app.win(), &format!("Cannot open {name}"), &err),
+                }
+            },
+        );
+    }
+
+    /// Alt+F6: unpack the marked/cursor archives into a folder (default: other pane, subfolder per archive).
+    fn extract(&self) {
+        let Some((_, names, paths)) = self.sources() else {
+            return;
+        };
+        let archives: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|p| p.file_name().is_some_and(archive::is_archive))
+            .collect();
+        if archives.is_empty() {
+            ops::alert(
+                self.win(),
+                "Nothing to unpack",
+                "Select one or more archives first.",
+            );
+            return;
+        }
+        let base = self.other_pane().cwd().unwrap_or_else(glib::home_dir);
+        let single = archives.len() == 1;
+        let default_dest = if single {
+            base.join(archive::stem(archives[0].file_name().unwrap_or_default()))
+        } else {
+            base.clone()
+        };
+        let what = ops::describe(&names);
+        let weak = self.weak.clone();
+        ops::prompt(
+            self.win(),
+            "Unpack",
+            &if single {
+                format!("Unpack {what} to:")
+            } else {
+                format!("Unpack {what} into subfolders under:")
+            },
+            &default_dest.to_string_lossy(),
+            None,
+            "Unpack",
+            move |text| {
+                let Some(app) = weak.upgrade() else {
+                    return;
+                };
+                let dest = expand_path(&text, Some(&base));
+                for archive_path in archives.clone() {
+                    let target = if single {
+                        dest.clone()
+                    } else {
+                        dest.join(archive::stem(archive_path.file_name().unwrap_or_default()))
+                    };
+                    let name = archive_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let w = app.weak.clone();
+                    app.runner.run_task(
+                        format!("Unpacking {name} → {}", target.to_string_lossy()),
+                        move || archive::extract(&archive_path, &target).map_err(|e| e.to_string()),
+                        move |result| {
+                            if let Some(app) = w.upgrade() {
+                                if let Err(err) = result {
+                                    ops::alert(app.win(), &format!("Cannot unpack {name}"), &err);
+                                }
+                                app.reload_all();
+                            }
+                        },
+                    );
+                }
+                app.active_pane().mark_all(false);
+            },
+        );
+    }
+
+    /// Alt+F5: pack the marked/cursor items into a new archive (format from the name).
+    fn pack(&self) {
+        let Some((cwd, names, _)) = self.sources() else {
+            return;
+        };
+        let base = self.other_pane().cwd().unwrap_or_else(|| cwd.clone());
+        let suggested = match names.as_slice() {
+            [one] => archive::stem(one),
+            _ => cwd
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "archive".into()),
+        };
+        let default_target = base.join(format!("{suggested}.zip"));
+        let text = default_target.to_string_lossy().into_owned();
+        let stem_end = text.rfind(".zip").map_or(-1, |i| i as i32);
+        let what = ops::describe(&names);
+        let weak = self.weak.clone();
+        ops::prompt(
+            self.win(),
+            "Pack",
+            &format!("Pack {what} into (.zip, .tar, .tar.gz):"),
+            &text,
+            Some((0, stem_end)),
+            "Pack",
+            move |text| {
+                let Some(app) = weak.upgrade() else {
+                    return;
+                };
+                let target = expand_path(&text, Some(&base));
+                let Some(format) = target.file_name().and_then(archive::Format::from_name) else {
+                    ops::alert(
+                        app.win(),
+                        "Unknown archive format",
+                        "Use a name ending in .zip, .tar, .tar.gz, or .tgz.",
+                    );
+                    return;
+                };
+                if target.exists() {
+                    ops::alert(
+                        app.win(),
+                        "Cannot pack",
+                        &format!("{} already exists.", target.to_string_lossy()),
+                    );
+                    return;
+                }
+                if let Some(parent) = target.parent()
+                    && let Err(err) = fs::create_dir_all(parent)
+                {
+                    ops::alert(app.win(), "Cannot create folder", &err.to_string());
+                    return;
+                }
+                let (cwd, names) = (cwd.clone(), names.clone());
+                let title = format!("Packing {what} → {}", target.to_string_lossy());
+                let w = app.weak.clone();
+                let shown = target.clone();
+                app.runner.run_task(
+                    title,
+                    move || {
+                        archive::create(&target, format, &cwd, &names).map_err(|e| e.to_string())
+                    },
+                    move |result| {
+                        if let Some(app) = w.upgrade() {
+                            if let Err(err) = result {
+                                ops::alert(
+                                    app.win(),
+                                    &format!("Cannot pack to {}", shown.to_string_lossy()),
+                                    &err,
+                                );
+                            }
+                            app.reload_all();
+                        }
+                    },
+                );
+                app.active_pane().mark_all(false);
+            },
+        );
     }
 
     /// Alt+V: mark, in both panes, everything that differs between them.

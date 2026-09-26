@@ -39,6 +39,9 @@ actions! {
     SwapPanes => "swap-panes", "Swap panes";
     OpenTerminal => "open-terminal", "Open terminal here";
     Search => "search", "Search…";
+    OpenArchive => "open-archive", "Open archive";
+    Extract => "extract", "Unpack archive…";
+    Pack => "pack", "Pack…";
     CompareFolders => "compare-folders", "Compare folders (mark differences)";
     SyncFolders => "sync-folders", "Synchronize folders…";
     QuickFilter => "quick-filter", "Quick filter";

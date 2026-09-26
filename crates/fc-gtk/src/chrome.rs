@@ -36,6 +36,7 @@ const MENUS: &[(&str, &[&[Action]])] = &[
             ],
             &[Action::Delete, Action::DeletePermanent],
             &[Action::Properties, Action::ChangeAttributes],
+            &[Action::OpenArchive, Action::Extract, Action::Pack],
             &[Action::Search, Action::OpenTerminal],
             &[Action::Quit],
         ],
