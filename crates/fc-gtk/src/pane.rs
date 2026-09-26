@@ -753,6 +753,17 @@ impl Pane {
         self.update_status();
     }
 
+    /// Set marks to exactly `names` (used by folder compare).
+    pub fn mark_names(&self, names: &HashSet<OsString>) {
+        for item in self.visible_items() {
+            let row = item.row();
+            if !row.is_parent {
+                item.set_marked(names.contains(&row.entry.name));
+            }
+        }
+        self.update_status();
+    }
+
     pub fn marked_names(&self) -> Vec<OsString> {
         self.visible_items()
             .filter(|item| item.marked())

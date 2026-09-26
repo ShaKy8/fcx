@@ -69,6 +69,8 @@ BackSpace = "go-up"
 "Ctrl+f" = "search"
 "Alt+F7" = "search"
 "Ctrl+y" = "quick-filter"
+"Alt+v" = "compare-folders"
+"Alt+s" = "sync-folders"
 "Ctrl+F9" = "calc-size"
 "Alt+F9" = "calc-size-all"
 

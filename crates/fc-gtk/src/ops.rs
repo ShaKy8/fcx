@@ -444,6 +444,8 @@ impl jobs::Sink for ChannelSink {
 struct Queued {
     title: String,
     spec: JobSpec,
+    /// Answer every conflict this way instead of asking (sync jobs overwrite).
+    conflict: Option<ConflictReply>,
 }
 
 /// Runs jobs one at a time and shows them in a panel at the bottom of the window.
@@ -484,7 +486,16 @@ impl JobRunner {
     }
 
     pub fn enqueue(&self, title: String, spec: JobSpec) {
-        self.0.queue.borrow_mut().push_back(Queued { title, spec });
+        self.enqueue_with(title, spec, None);
+    }
+
+    /// Like `enqueue`, with a fixed answer for conflicts.
+    pub fn enqueue_with(&self, title: String, spec: JobSpec, conflict: Option<ConflictReply>) {
+        self.0.queue.borrow_mut().push_back(Queued {
+            title,
+            spec,
+            conflict,
+        });
         self.pump();
     }
 
@@ -556,11 +567,12 @@ impl JobRunner {
         let (tx, rx) = async_channel::unbounded::<Msg>();
         let spec = job.spec.clone();
         let worker_control = control.clone();
+        let preset_conflict = job.conflict;
         std::thread::spawn(move || {
             let mut sink = ChannelSink {
                 tx: tx.clone(),
                 last_sent: Instant::now() - PROGRESS_INTERVAL,
-                conflict_all: None,
+                conflict_all: preset_conflict,
                 error_all: None,
             };
             let report = jobs::run(&spec, &worker_control, &mut sink);

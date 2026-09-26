@@ -9,6 +9,7 @@ mod pane;
 mod props;
 mod row;
 mod search;
+mod sync;
 
 use std::path::PathBuf;
 

@@ -39,6 +39,8 @@ actions! {
     SwapPanes => "swap-panes", "Swap panes";
     OpenTerminal => "open-terminal", "Open terminal here";
     Search => "search", "Search…";
+    CompareFolders => "compare-folders", "Compare folders (mark differences)";
+    SyncFolders => "sync-folders", "Synchronize folders…";
     QuickFilter => "quick-filter", "Quick filter";
     // tabs
     NewTab => "new-tab", "New tab";

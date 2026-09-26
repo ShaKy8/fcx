@@ -11,9 +11,10 @@ use std::process::Command;
 use std::rc::{Rc, Weak};
 
 use fc_core::action::Action;
+use fc_core::compare::{self, Options as CompareOptions, Status, SyncAction};
 use fc_core::favorites::Favorites;
 use fc_core::glob::Mask;
-use fc_core::jobs::{JobSpec, Operation};
+use fc_core::jobs::{ConflictReply, JobSpec, Operation};
 use fc_core::keymap::{Chord, Keymap, Mods};
 use fc_core::rename::{self, Source};
 use gtk::prelude::*;
@@ -27,6 +28,7 @@ use crate::ops::{self, JobRunner};
 use crate::pane::{Pane, SortColumn, ViewMode, expand_path};
 use crate::props;
 use crate::search;
+use crate::sync;
 
 pub struct App {
     weak: Weak<App>,
@@ -267,6 +269,8 @@ impl App {
             Action::OpenTerminal => self.open_terminal(),
             Action::Search => self.search(),
             Action::QuickFilter => pane.toggle_quick_filter(),
+            Action::CompareFolders => self.compare_folders(),
+            Action::SyncFolders => self.sync_folders(),
             Action::ToggleTree => pane.toggle_tree(),
             Action::CalcSize => pane.calc_sizes(false),
             Action::CalcSizeAll => pane.calc_sizes(true),
@@ -511,6 +515,126 @@ impl App {
                 app.window.present();
             }
         });
+    }
+
+    /// Alt+V: mark, in both panes, everything that differs between them.
+    fn compare_folders(&self) {
+        let (Some(left), Some(right)) = (self.active_pane().cwd(), self.other_pane().cwd()) else {
+            return;
+        };
+        if left == right {
+            return;
+        }
+        let weak = self.weak.clone();
+        let (l, r) = (left.clone(), right.clone());
+        glib::spawn_future_local(async move {
+            let options = CompareOptions {
+                recursive: false,
+                ..CompareOptions::default()
+            };
+            let result = gio::spawn_blocking(move || {
+                compare::compare(&l, &r, &options, &std::sync::atomic::AtomicBool::new(false))
+            })
+            .await;
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            let report = match result {
+                Ok(Ok(report)) => report,
+                Ok(Err(err)) => {
+                    ops::alert(app.win(), "Cannot compare", &err.to_string());
+                    return;
+                }
+                Err(_) => return,
+            };
+            let (mut on_left, mut on_right) = (
+                std::collections::HashSet::new(),
+                std::collections::HashSet::new(),
+            );
+            for diff in report.differences() {
+                let Some(name) = diff.rel.file_name() else {
+                    continue;
+                };
+                match diff.status {
+                    Status::LeftOnly => {
+                        on_left.insert(name.to_os_string());
+                    }
+                    Status::RightOnly => {
+                        on_right.insert(name.to_os_string());
+                    }
+                    _ => {
+                        on_left.insert(name.to_os_string());
+                        on_right.insert(name.to_os_string());
+                    }
+                }
+            }
+            // The panes may have moved on while comparing; only mark if they didn't.
+            let (active, other) = (app.active_pane(), app.other_pane());
+            if active.cwd().as_deref() == Some(left.as_path()) {
+                active.mark_names(&on_left);
+            }
+            if other.cwd().as_deref() == Some(right.as_path()) {
+                other.mark_names(&on_right);
+            }
+        });
+    }
+
+    /// Alt+S: the synchronize dialog for the two panes' folders.
+    fn sync_folders(&self) {
+        let left = self.hosts[0].current().cwd().unwrap_or_else(glib::home_dir);
+        let right = self.hosts[1].current().cwd().unwrap_or_else(glib::home_dir);
+        let weak = self.weak.clone();
+        sync::show(self.win(), left, right, move |actions| {
+            if let Some(app) = weak.upgrade() {
+                app.run_sync(actions);
+            }
+        });
+    }
+
+    /// Copies grouped per destination folder as overwrite-preset jobs; deletes go to the trash.
+    fn run_sync(&self, actions: Vec<SyncAction>) {
+        let mut by_dest: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> = Default::default();
+        let mut deletes = Vec::new();
+        for action in actions {
+            match action {
+                SyncAction::Copy { from, to } => {
+                    if let Some(dir) = to.parent() {
+                        by_dest.entry(dir.to_path_buf()).or_default().push(from);
+                    }
+                }
+                SyncAction::Delete { path } => deletes.push(path),
+                SyncAction::Skip { .. } => {}
+            }
+        }
+        for (dest, sources) in by_dest {
+            if let Err(err) = fs::create_dir_all(&dest) {
+                ops::alert(
+                    self.win(),
+                    "Cannot create folder",
+                    &format!("{}: {err}", dest.display()),
+                );
+                continue;
+            }
+            let title = format!(
+                "Sync {} item(s) → {}",
+                sources.len(),
+                dest.to_string_lossy()
+            );
+            self.runner.enqueue_with(
+                title,
+                JobSpec::copy(sources, dest),
+                Some(ConflictReply::Overwrite),
+            );
+        }
+        if !deletes.is_empty() {
+            let weak = self.weak.clone();
+            ops::trash(deletes, move |failures| {
+                if let Some(app) = weak.upgrade() {
+                    app.reload_all();
+                    app.after_trash(failures);
+                }
+            });
+        }
     }
 
     fn open_terminal(&self) {
