@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # fc-core has no GTK dependency, so this runs anywhere and fails fast.
+  core:
+    name: fc-core tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy -p fc-core --all-targets --locked -- -D warnings
+      - run: cargo test -p fc-core --locked
+
+  # The GTK crate needs gtk4 ≥ 4.20 and libarchive; Arch matches the target
+  # platform (Omarchy) and is what makepkg builds on.
+  full:
+    name: full build (Arch)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install toolchain and libraries
+        run: |
+          pacman -Syu --noconfirm --needed base-devel rust git gtk4 libarchive glib2 pkgconf
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo build --release --locked -p fc-gtk
+      - run: cargo test --workspace --locked
+      - name: Package files are valid
+        run: |
+          pacman -S --noconfirm --needed desktop-file-utils
+          desktop-file-validate packaging/fcx.desktop
+          test -x target/release/fcx

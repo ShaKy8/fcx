@@ -6,7 +6,7 @@ members = ["crates/fc-core", "crates/fc-gtk"]
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 fc-core = { path = "crates/fc-core" }
