@@ -9,11 +9,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # fc-core has no GTK dependency, so this runs anywhere and fails fast.
+  # fc-core has no GTK dependency (only libarchive), so this runs on plain
+  # Ubuntu and fails fast.
   core:
     name: fc-core tests
     runs-on: ubuntu-latest
     steps:
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libarchive-dev pkg-config
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
