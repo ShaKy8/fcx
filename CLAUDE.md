@@ -22,6 +22,19 @@ System deps: `rustup` (stable), plus `gtk4` (already installed on Omarchy).
 - **All user-triggerable behavior goes through the named action registry** (`copy`, `move`, `rename`, …). Keys map to action names via `keymap.toml`. **Default bindings must match FreeCommander XE** (the user does not want to relearn them): look up FC's shortcut before assigning a key, and never reuse an FC chord for something else (e.g. Ctrl+Q is FC's quick view, not quit). The source of truth is `crates/fc-core/src/keymap.default.toml`.
 - **File operations are jobs:** plan (enumerate) then execute, streaming progress/conflict events, cancellable and pausable, with per-file error handling (skip/retry/abort) instead of whole-job failure.
 
+## Module map (fc-gtk)
+`app.rs` owns the window and dispatches every `Action` (keys, menus, toolbar, functions bar, context menu all call `App::run`). `chrome.rs` builds the keymap-driven menu bar/toolbar/places bar/functions bar and the F1 shortcuts list. `host.rs` is one side of the window: a tab bar over a stack of `Pane`s (one full pane per tab). `pane.rs` is a listing: path bar, folder tree, details/list/thumbnail views sharing one `SingleSelection`, quick search, marks. `item.rs`/`row.rs` are the list-model object and its precomputed display strings. `ops.rs` has dialogs, Nautilus-compatible clipboard, trash, and the job runner with its progress panel. `props.rs` is the properties dialog; `favorites.rs` the favorites menu/editor.
+
+## Manual UI testing on this machine
+Drive the real app with synthetic input and screenshots (no PIL available):
+```sh
+./target/debug/fc /tmp/some/dir /tmp/other &   # G_DEBUG=fatal-criticals to catch GTK criticals
+hyprctl dispatch focuswindow class:org.omarchy.fc
+wtype -k F5; wtype -M alt -k Return -m alt      # keys and chords
+G=$(hyprctl clients -j | jq -r '.[] | select(.class=="org.omarchy.fc") | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"'); grim -g "$G" shot.png
+```
+Caveats: a virtual *lone* Ctrl press is rewritten to Escape by this machine's keyboard remapper (Ctrl+key combos are fine); `grim` hangs while the screen is locked; set `XDG_CONFIG_HOME` to a scratch dir so tests don't touch `~/.config/fc/favorites.toml`; `/tmp` is tmpfs, where GIO cannot trash (the app offers permanent delete instead).
+
 ## Filesystem invariants
 - Filenames are `OsString`/`PathBuf` end to end; convert lossily only at display time.
 - Never follow symlinks during recursive copy/delete; the walker must detect loops.

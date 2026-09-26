@@ -221,8 +221,10 @@ pub fn register_actions(gtk_app: &gtk::Application, keymap: &Keymap, run: Run) {
     }
 }
 
-pub fn menu_bar() -> gtk::PopoverMenuBar {
+/// The menu bar plus the section that lists favorites (filled by the app).
+pub fn menu_bar() -> (gtk::PopoverMenuBar, gio::Menu) {
     let root = gio::Menu::new();
+    let favorites_section = gio::Menu::new();
     for (title, sections) in MENUS {
         let menu = gio::Menu::new();
         for section in sections.iter() {
@@ -233,10 +235,21 @@ pub fn menu_bar() -> gtk::PopoverMenuBar {
             menu.append_section(None, &items);
         }
         root.append_submenu(Some(title), &menu);
+        if *title == "F_older" {
+            // Favorites sit between Folder and View, like FC's own menu order.
+            let fav = gio::Menu::new();
+            let fixed = gio::Menu::new();
+            for action in [Action::AddFavorite, Action::EditFavorites] {
+                fixed.append(Some(action.label()), Some(&format!("app.{}", action.id())));
+            }
+            fav.append_section(None, &fixed);
+            fav.append_section(None, &favorites_section);
+            root.append_submenu(Some("Fav_orites"), &fav);
+        }
     }
     let bar = gtk::PopoverMenuBar::from_model(Some(&root));
     bar.add_css_class("menu-bar");
-    bar
+    (bar, favorites_section)
 }
 
 // ---- toolbar -------------------------------------------------------------------

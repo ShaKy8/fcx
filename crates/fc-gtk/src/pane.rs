@@ -53,6 +53,7 @@ pub enum ViewMode {
 type DropHandler = Rc<dyn Fn(Vec<PathBuf>, Option<Operation>)>;
 /// Right-click (or Shift+F10): the widget to anchor a menu on and the position inside it.
 type ContextHandler = Rc<dyn Fn(&gtk::Widget, f64, f64)>;
+type NavigatedHandler = Rc<dyn Fn(&Path)>;
 
 #[derive(Clone)]
 pub struct Pane(Rc<Inner>);
@@ -91,6 +92,7 @@ struct Inner {
     search_timer: RefCell<Option<glib::SourceId>>,
     on_drop: RefCell<Option<DropHandler>>,
     on_context: RefCell<Option<ContextHandler>>,
+    on_navigated: RefCell<Option<NavigatedHandler>>,
 }
 
 impl Pane {
@@ -262,6 +264,7 @@ impl Pane {
                 search_timer: RefCell::new(None),
                 on_drop: RefCell::new(None),
                 on_context: RefCell::new(None),
+                on_navigated: RefCell::new(None),
             }
         }));
         pane.connect_signals();
@@ -297,6 +300,11 @@ impl Pane {
 
     pub fn connect_context_menu(&self, f: impl Fn(&gtk::Widget, f64, f64) + 'static) {
         *self.0.on_context.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Runs `f` with the new folder after every successful listing.
+    pub fn connect_navigated(&self, f: impl Fn(&Path) + 'static) {
+        *self.0.on_navigated.borrow_mut() = Some(Rc::new(f));
     }
 
     /// Shift+F10: open the context menu near the top of the view.
@@ -946,6 +954,10 @@ impl Pane {
         }
         self.0.status.remove_css_class("error");
         self.update_status();
+        let handler = self.0.on_navigated.borrow().clone();
+        if let Some(handler) = handler {
+            handler(&path);
+        }
 
         let found = select.is_some_and(|name| self.select_name(&name));
         if !found {

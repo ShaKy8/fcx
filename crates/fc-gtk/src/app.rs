@@ -2,7 +2,7 @@
 //! the jobs panel, and the key → chord → action dispatcher. Every feature goes
 //! through [`App::run`], which menus, toolbar, and the functions bar share.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -11,6 +11,7 @@ use std::process::Command;
 use std::rc::{Rc, Weak};
 
 use fc_core::action::Action;
+use fc_core::favorites::Favorites;
 use fc_core::glob::Mask;
 use fc_core::jobs::{JobSpec, Operation};
 use fc_core::keymap::{Chord, Keymap, Mods};
@@ -18,17 +19,22 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::chrome::{self, FunctionsBar, PlacesBar};
+use crate::favorites;
+use crate::host::PaneHost;
 use crate::ops::{self, JobRunner};
 use crate::pane::{Pane, SortColumn, ViewMode, expand_path};
 use crate::props;
 
 pub struct App {
     weak: Weak<App>,
+    gtk_app: gtk::Application,
     window: gtk::ApplicationWindow,
-    panes: [Pane; 2],
+    hosts: [PaneHost; 2],
     active: Cell<usize>,
     keymap: Keymap,
     runner: JobRunner,
+    favorites: RefCell<Favorites>,
+    favorites_menu: gio::Menu,
     split: gtk::Paned,
     menu_bar: gtk::PopoverMenuBar,
     toolbar: gtk::Box,
@@ -38,19 +44,6 @@ pub struct App {
 
 impl App {
     pub fn new(gtk_app: &gtk::Application, start: [PathBuf; 2], keymap: Keymap) -> Rc<Self> {
-        let panes = [Pane::new(), Pane::new()];
-        let split = gtk::Paned::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .start_child(panes[0].widget())
-            .end_child(panes[1].widget())
-            .resize_start_child(true)
-            .resize_end_child(true)
-            .shrink_start_child(false)
-            .shrink_end_child(false)
-            .vexpand(true)
-            .build();
-        // No explicit position: with both children resizable GTK splits the width evenly.
-
         let window = gtk::ApplicationWindow::builder()
             .application(gtk_app)
             .title("fc")
@@ -78,20 +71,75 @@ impl App {
                     }
                 })
             };
+            // Every pane, in any tab on either side, gets the same wiring.
+            let host = |side: usize| {
+                let weak = weak.clone();
+                PaneHost::new(move |pane| {
+                    let w = weak.clone();
+                    pane.connect_focus_enter(move || {
+                        if let Some(app) = w.upgrade() {
+                            app.set_active(side, false);
+                        }
+                    });
+                    let w = weak.clone();
+                    pane.connect_drop(move |paths, forced| {
+                        if let Some(app) = w.upgrade() {
+                            app.dropped(side, paths, forced);
+                        }
+                    });
+                    let w = weak.clone();
+                    pane.connect_context_menu(move |anchor, x, y| {
+                        if let Some(app) = w.upgrade() {
+                            app.set_active(side, false);
+                            app.show_context_menu(anchor, x, y);
+                        }
+                    });
+                })
+            };
+            let hosts = [host(0), host(1)];
+            let split = gtk::Paned::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .start_child(hosts[0].widget())
+                .end_child(hosts[1].widget())
+                .resize_start_child(true)
+                .resize_end_child(true)
+                .shrink_start_child(false)
+                .shrink_end_child(false)
+                .vexpand(true)
+                .build();
+            // No explicit position: with both children resizable GTK splits the width evenly.
+            let (menu_bar, favorites_menu) = chrome::menu_bar();
             App {
                 weak: weak.clone(),
-                menu_bar: chrome::menu_bar(),
+                gtk_app: gtk_app.clone(),
+                menu_bar,
+                favorites_menu,
+                favorites: RefCell::new(Favorites::default()),
                 toolbar: chrome::toolbar(&keymap, run.clone()),
                 places,
                 functions: FunctionsBar::new(keymap.clone(), run),
                 window,
-                panes,
+                hosts,
                 active: Cell::new(0),
                 keymap,
                 runner,
                 split,
             }
         });
+
+        // Opening a favorite from the menu, the popup, or Shift+Ctrl+1..0.
+        let open_favorite =
+            gio::SimpleAction::new(favorites::OPEN_ACTION, Some(&String::static_variant_type()));
+        let weak = app.weak.clone();
+        open_favorite.connect_activate(move |_, target| {
+            if let (Some(app), Some(path)) =
+                (weak.upgrade(), target.and_then(|v| v.get::<String>()))
+            {
+                app.active_pane().navigate(PathBuf::from(path), None);
+            }
+        });
+        gtk_app.add_action(&open_favorite);
+        app.load_favorites();
 
         let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
         layout.append(&app.menu_bar);
@@ -102,27 +150,6 @@ impl App {
         layout.append(app.functions.widget());
         app.window.set_child(Some(&layout));
 
-        for (i, pane) in app.panes.iter().enumerate() {
-            let weak = app.weak.clone();
-            pane.connect_focus_enter(move || {
-                if let Some(app) = weak.upgrade() {
-                    app.set_active(i, false);
-                }
-            });
-            let weak = app.weak.clone();
-            pane.connect_drop(move |paths, forced| {
-                if let Some(app) = weak.upgrade() {
-                    app.dropped(i, paths, forced);
-                }
-            });
-            let weak = app.weak.clone();
-            pane.connect_context_menu(move |anchor, x, y| {
-                if let Some(app) = weak.upgrade() {
-                    app.set_active(i, false);
-                    app.show_context_menu(anchor, x, y);
-                }
-            });
-        }
         let weak = app.weak.clone();
         app.runner.connect_finished(move || {
             if let Some(app) = weak.upgrade() {
@@ -147,10 +174,19 @@ impl App {
             }
         });
         app.window.add_controller(keys);
+        // A modifier released while another window had focus never reports back.
+        let focus = gtk::EventControllerFocus::new();
+        let weak = app.weak.clone();
+        focus.connect_leave(move |_| {
+            if let Some(app) = weak.upgrade() {
+                app.functions.set_mods(Mods::default());
+            }
+        });
+        app.window.add_controller(focus);
 
         let [left, right] = start;
-        app.panes[0].navigate(left, None);
-        app.panes[1].navigate(right, None);
+        app.hosts[0].open_tab(left);
+        app.hosts[1].open_tab(right);
         app.set_active(0, true);
         app.window.present();
         app
@@ -203,11 +239,25 @@ impl App {
                 }
             }
             Action::SwapPanes => {
-                if let (Some(a), Some(b)) = (self.panes[0].cwd(), self.panes[1].cwd()) {
-                    self.panes[0].navigate(b, None);
-                    self.panes[1].navigate(a, None);
+                let (left, right) = (self.hosts[0].current(), self.hosts[1].current());
+                if let (Some(a), Some(b)) = (left.cwd(), right.cwd()) {
+                    left.navigate(b, None);
+                    right.navigate(a, None);
                 }
             }
+            Action::NewTab => {
+                let path = pane.cwd().unwrap_or_else(glib::home_dir);
+                self.active_host().open_tab(path);
+            }
+            Action::CloseTab => self.active_host().close_current(),
+            Action::CloseOtherTabs => self.active_host().close_others(),
+            Action::RestoreTab => self.active_host().restore_closed(),
+            Action::LastActiveTab => self.active_host().switch_last_active(),
+            Action::NextTab => self.active_host().switch_relative(1),
+            Action::PrevTab => self.active_host().switch_relative(-1),
+            Action::AddFavorite => self.add_favorite(),
+            Action::EditFavorites => self.edit_favorites(),
+            Action::FavoritesMenu => favorites::popup(&pane.view_widget(), &self.favorites_menu),
             Action::OpenTerminal => self.open_terminal(),
             Action::ToggleTree => pane.toggle_tree(),
             Action::CalcSize => pane.calc_sizes(false),
@@ -259,7 +309,7 @@ impl App {
                 self.split.set_orientation(flipped);
             }
             Action::ToggleSinglePane => {
-                let other = self.other_pane().widget();
+                let other = self.hosts[1 - self.active.get()].widget();
                 other.set_visible(!other.is_visible());
             }
             Action::ToggleFullscreen => {
@@ -280,28 +330,84 @@ impl App {
 
     // ---- pane helpers ------------------------------------------------------
 
-    fn active_pane(&self) -> &Pane {
-        &self.panes[self.active.get()]
+    fn active_host(&self) -> &PaneHost {
+        &self.hosts[self.active.get()]
     }
 
-    fn other_pane(&self) -> &Pane {
-        &self.panes[1 - self.active.get()]
+    fn active_pane(&self) -> Pane {
+        self.hosts[self.active.get()].current()
+    }
+
+    fn other_pane(&self) -> Pane {
+        self.hosts[1 - self.active.get()].current()
     }
 
     fn set_active(&self, index: usize, grab_focus: bool) {
         self.active.set(index);
-        for (i, pane) in self.panes.iter().enumerate() {
-            pane.set_active(i == index);
+        for (i, host) in self.hosts.iter().enumerate() {
+            host.set_active(i == index);
         }
         if grab_focus {
-            self.panes[index].focus();
+            self.hosts[index].current().focus();
         }
     }
 
     fn reload_all(&self) {
-        for pane in &self.panes {
-            pane.reload();
+        for host in &self.hosts {
+            for pane in host.panes() {
+                pane.reload();
+            }
         }
+    }
+
+    // ---- favorites ---------------------------------------------------------
+
+    fn load_favorites(&self) {
+        match Favorites::load(&Favorites::default_path()) {
+            Ok(favs) => *self.favorites.borrow_mut() = favs,
+            Err(err) => favorites::warn(self.win(), &err),
+        }
+        favorites::refresh_menu(
+            &self.gtk_app,
+            &self.favorites_menu,
+            &self.favorites.borrow(),
+        );
+    }
+
+    fn save_favorites(&self, favs: Favorites) {
+        if let Err(err) = favs.save(&Favorites::default_path()) {
+            favorites::warn(self.win(), &err);
+        }
+        *self.favorites.borrow_mut() = favs;
+        favorites::refresh_menu(
+            &self.gtk_app,
+            &self.favorites_menu,
+            &self.favorites.borrow(),
+        );
+    }
+
+    fn add_favorite(&self) {
+        let Some(cwd) = self.active_pane().cwd() else {
+            return;
+        };
+        let mut favs = self.favorites.borrow().clone();
+        if favs.add(cwd) {
+            self.save_favorites(favs);
+        }
+    }
+
+    fn edit_favorites(&self) {
+        let weak = self.weak.clone();
+        favorites::edit(
+            self.win(),
+            self.favorites.borrow().clone(),
+            self.active_pane().cwd(),
+            move |favs| {
+                if let Some(app) = weak.upgrade() {
+                    app.save_favorites(favs);
+                }
+            },
+        );
     }
 
     fn win(&self) -> &gtk::Window {
@@ -514,7 +620,7 @@ impl App {
     /// Drop onto pane `index`. Without a modifier this behaves like Nautilus and
     /// FreeCommander: move within one filesystem, copy across filesystems.
     fn dropped(&self, index: usize, paths: Vec<PathBuf>, forced: Option<Operation>) {
-        let Some(dest) = self.panes[index].cwd() else {
+        let Some(dest) = self.hosts[index].current().cwd() else {
             return;
         };
         let paths: Vec<PathBuf> = paths

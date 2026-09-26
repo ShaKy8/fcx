@@ -38,6 +38,18 @@ actions! {
     SameFolderBoth => "same-folder-both", "Same folder in both panes";
     SwapPanes => "swap-panes", "Swap panes";
     OpenTerminal => "open-terminal", "Open terminal here";
+    // tabs
+    NewTab => "new-tab", "New tab";
+    CloseTab => "close-tab", "Close tab";
+    CloseOtherTabs => "close-other-tabs", "Close other tabs";
+    RestoreTab => "restore-tab", "Restore closed tab";
+    LastActiveTab => "last-active-tab", "Last active tab";
+    NextTab => "next-tab", "Next tab";
+    PrevTab => "prev-tab", "Previous tab";
+    // favorites
+    AddFavorite => "add-favorite", "Add current folder to favorites";
+    EditFavorites => "edit-favorites", "Edit favorites…";
+    FavoritesMenu => "favorites-menu", "Favorites menu";
     ToggleTree => "toggle-tree", "Folder tree";
     CalcSize => "calc-size", "Calculate folder size";
     CalcSizeAll => "calc-size-all", "Calculate all folder sizes";

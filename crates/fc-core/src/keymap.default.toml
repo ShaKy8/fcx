@@ -68,6 +68,20 @@ BackSpace = "go-up"
 "Ctrl+F9" = "calc-size"
 "Alt+F9" = "calc-size-all"
 
+# --- tabs ---
+"Ctrl+t" = "new-tab"
+"Ctrl+w" = "close-tab"
+"Shift+Ctrl+w" = "close-other-tabs"
+"Shift+Ctrl+t" = "restore-tab"
+"Ctrl+Page_Up" = "last-active-tab"
+"Ctrl+Tab" = "next-tab"          # fc extra
+"Shift+Ctrl+Tab" = "prev-tab"    # fc extra
+
+# --- favorites (Shift+Ctrl+1..0 jump to the first ten; see the Favorites menu) ---
+"Shift+Ctrl+v" = "add-favorite"
+"Shift+Ctrl+f" = "edit-favorites"
+"Alt+Up" = "favorites-menu"
+
 # --- sorting ---
 "Ctrl+F3" = "sort-by-name"
 "Ctrl+F4" = "sort-by-ext"      # FC: "by type"; fc has no type column, so by extension

@@ -1,5 +1,7 @@
 mod app;
 mod chrome;
+mod favorites;
+mod host;
 mod item;
 mod ops;
 mod pane;
@@ -31,6 +33,9 @@ const CSS: &str = "
 .file-grid { padding: 4px; }
 .file-grid.thumbnails > child { padding: 6px; }
 .folder-tree { font-size: 0.95em; }
+.tab-bar { padding: 2px 2px 0 2px; border-bottom: 1px solid alpha(currentColor, 0.15); }
+.tab-bar button.tab { padding: 1px 10px; min-height: 0; border-radius: 6px 6px 0 0; }
+.tab-bar button.tab:checked { background: alpha(@theme_selected_bg_color, 0.25); }
 ";
 
 fn main() -> glib::ExitCode {
