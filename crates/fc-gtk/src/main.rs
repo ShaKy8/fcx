@@ -48,8 +48,22 @@ const CSS: &str = "
 
 fn main() -> glib::ExitCode {
     // `fcx [LEFT [RIGHT]]`: parsed by hand; GApplication would reject unknown arguments.
-    let mut args = std::env::args_os().skip(1).map(PathBuf::from);
-    let explicit = std::env::args_os().len() > 1;
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if raw.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "Usage: fcx [LEFT_DIR [RIGHT_DIR]]\n\n\
+             FreeCommander-style dual-pane file manager for Omarchy.\n\
+             With no folders given, the last session's tabs are restored.\n\
+             Press F1 inside the app for the key bindings; F12 for settings."
+        );
+        return glib::ExitCode::SUCCESS;
+    }
+    if raw.iter().any(|a| a == "--version" || a == "-V") {
+        println!("fcx {}", env!("CARGO_PKG_VERSION"));
+        return glib::ExitCode::SUCCESS;
+    }
+    let mut args = raw.iter().map(PathBuf::from);
+    let explicit = !raw.is_empty();
     let left = args
         .next()
         .and_then(|p| std::path::absolute(p).ok())
