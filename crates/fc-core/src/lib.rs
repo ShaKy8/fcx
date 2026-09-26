@@ -3,6 +3,7 @@
 pub mod action;
 pub mod archive;
 pub mod compare;
+pub mod config;
 pub mod favorites;
 pub mod format;
 pub mod fs;

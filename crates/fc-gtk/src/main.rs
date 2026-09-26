@@ -9,6 +9,7 @@ mod pane;
 mod props;
 mod row;
 mod search;
+mod settings;
 mod sync;
 mod theme;
 mod viewer;
@@ -48,6 +49,7 @@ const CSS: &str = "
 fn main() -> glib::ExitCode {
     // `fcx [LEFT [RIGHT]]`: parsed by hand; GApplication would reject unknown arguments.
     let mut args = std::env::args_os().skip(1).map(PathBuf::from);
+    let explicit = std::env::args_os().len() > 1;
     let left = args
         .next()
         .and_then(|p| std::path::absolute(p).ok())
@@ -62,7 +64,7 @@ fn main() -> glib::ExitCode {
     app.connect_activate(move |app| {
         // App lives as long as its window; the closure holds it via the Rc.
         let keymap = load_keymap();
-        let app = App::new(app, [left.clone(), right.clone()], keymap);
+        let app = App::new(app, [left.clone(), right.clone()], explicit, keymap);
         std::mem::forget(app);
     });
     app.run_with_args::<&str>(&[])

@@ -519,6 +519,12 @@ impl Pane {
         self.navigate_with(target, select, false);
     }
 
+    pub fn set_show_hidden(&self, show: bool) {
+        if self.0.show_hidden.get() != show {
+            self.toggle_hidden();
+        }
+    }
+
     pub fn toggle_hidden(&self) {
         let keep = self.cursor_name();
         self.0.show_hidden.set(!self.0.show_hidden.get());

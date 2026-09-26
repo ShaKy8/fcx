@@ -118,6 +118,13 @@ const MENUS: &[(&str, &[&[Action]])] = &[
             ],
         ],
     ),
+    (
+        "_Tools",
+        &[
+            &[Action::Search, Action::OpenTerminal],
+            &[Action::Settings, Action::EditKeymap],
+        ],
+    ),
     ("Hel_p", &[&[Action::ShowShortcuts]]),
 ];
 

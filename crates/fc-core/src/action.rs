@@ -116,6 +116,8 @@ actions! {
     TogglePlacesBar => "toggle-places-bar", "Places bar";
     ToggleFunctionsBar => "toggle-functions-bar", "Functions bar";
     // app
+    Settings => "settings", "Settings…";
+    EditKeymap => "edit-keymap", "Edit key bindings…";
     ShowShortcuts => "show-shortcuts", "Keyboard shortcuts";
     Quit => "quit", "Exit";
 }

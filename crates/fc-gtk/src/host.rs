@@ -79,6 +79,24 @@ impl PaneHost {
             .collect()
     }
 
+    /// Folders of all tabs, in order (for the saved session).
+    pub fn tab_paths(&self) -> Vec<PathBuf> {
+        self.0
+            .tabs
+            .borrow()
+            .iter()
+            .filter_map(|t| t.pane.cwd())
+            .collect()
+    }
+
+    pub fn current_index(&self) -> usize {
+        self.0.current.get()
+    }
+
+    pub fn select_tab(&self, index: usize) {
+        self.switch_to(index, false);
+    }
+
     /// Active-side highlight, applied to whichever tab is showing.
     pub fn set_active(&self, active: bool) {
         self.0.active.set(active);

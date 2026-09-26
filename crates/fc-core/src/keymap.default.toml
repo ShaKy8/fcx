@@ -112,4 +112,5 @@ F11 = "toggle-fullscreen"
 
 # --- app ---
 F1 = "show-shortcuts"
+F12 = "settings"
 "Alt+F4" = "quit"

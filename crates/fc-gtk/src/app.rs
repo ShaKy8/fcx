@@ -13,6 +13,7 @@ use std::rc::{Rc, Weak};
 use fc_core::action::Action;
 use fc_core::archive;
 use fc_core::compare::{self, Options as CompareOptions, Status, SyncAction};
+use fc_core::config::{DragDefault, Session, Settings, SideSession, ViewKind};
 use fc_core::favorites::Favorites;
 use fc_core::glob::Mask;
 use fc_core::jobs::{ConflictReply, JobSpec, Operation};
@@ -29,6 +30,7 @@ use crate::ops::{self, JobRunner};
 use crate::pane::{Pane, SortColumn, ViewMode, expand_path};
 use crate::props;
 use crate::search;
+use crate::settings;
 use crate::sync;
 use crate::viewer::{self, Viewer};
 
@@ -42,6 +44,7 @@ pub struct App {
     runner: JobRunner,
     favorites: RefCell<Favorites>,
     favorites_menu: gio::Menu,
+    settings: RefCell<Settings>,
     /// Last multi rename, for undo.
     last_rename: RefCell<Option<AppliedRename>>,
     split: gtk::Paned,
@@ -55,14 +58,43 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(gtk_app: &gtk::Application, start: [PathBuf; 2], keymap: Keymap) -> Rc<Self> {
+    pub fn new(
+        gtk_app: &gtk::Application,
+        start: [PathBuf; 2],
+        explicit_start: bool,
+        keymap: Keymap,
+    ) -> Rc<Self> {
+        let settings = Settings::load(&Settings::path()).unwrap_or_else(|err| {
+            eprintln!("fcx: {err}; using default settings");
+            Settings::default()
+        });
+        // Restore the last session unless folders were given on the command line.
+        let session = if settings.restore_tabs && !explicit_start {
+            Session::load(&Session::path()).unwrap_or_else(|err| {
+                eprintln!("fcx: {err}; starting fresh");
+                Session::default()
+            })
+        } else {
+            Session::default()
+        };
         let window = gtk::ApplicationWindow::builder()
             .application(gtk_app)
             .title("fcx")
-            .default_width(1200)
-            .default_height(760)
+            .default_width(if session.width > 0 {
+                session.width
+            } else {
+                1200
+            })
+            .default_height(if session.height > 0 {
+                session.height
+            } else {
+                760
+            })
             .show_menubar(false)
             .build();
+        if session.maximized {
+            window.maximize();
+        }
         let runner = JobRunner::new(window.upcast_ref());
 
         let app = Rc::new_cyclic(|weak: &Weak<App>| {
@@ -112,6 +144,11 @@ impl App {
                             app.update_quick_view();
                         }
                     });
+                    if let Some(app) = weak.upgrade() {
+                        let settings = app.settings.borrow();
+                        pane.set_show_hidden(settings.show_hidden);
+                        pane.set_view_mode(view_mode(settings.default_view));
+                    }
                     let w = weak.clone();
                     pane.connect_activate_file(move |path| {
                         let Some(app) = w.upgrade() else {
@@ -144,6 +181,7 @@ impl App {
                 menu_bar,
                 favorites_menu,
                 favorites: RefCell::new(Favorites::default()),
+                settings: RefCell::new(settings),
                 last_rename: RefCell::new(None),
                 toolbar: chrome::toolbar(&keymap, run.clone()),
                 places,
@@ -216,12 +254,145 @@ impl App {
         });
         app.window.add_controller(focus);
 
+        app.apply_settings();
         let [left, right] = start;
-        app.hosts[0].open_tab(left);
-        app.hosts[1].open_tab(right);
-        app.set_active(0, true);
+        let restored = app.restore_side(0, &session.left) & app.restore_side(1, &session.right);
+        if !restored {
+            if app.hosts[0].panes().is_empty() {
+                app.hosts[0].open_tab(left);
+            }
+            if app.hosts[1].panes().is_empty() {
+                app.hosts[1].open_tab(right);
+            }
+        }
+        app.set_active(session.active_side.min(1), true);
+        let weak = app.weak.clone();
+        app.window.connect_close_request(move |_| {
+            if let Some(app) = weak.upgrade() {
+                app.save_session();
+            }
+            glib::Propagation::Proceed
+        });
         app.window.present();
+        if session.split_position > 0 {
+            let split = app.split.clone();
+            let position = session.split_position;
+            glib::idle_add_local_once(move || split.set_position(position));
+        }
         app
+    }
+
+    /// Opens a side's saved tabs (skipping folders that no longer exist).
+    /// Returns false if nothing could be restored.
+    fn restore_side(&self, side: usize, saved: &SideSession) -> bool {
+        let tabs: Vec<&PathBuf> = saved.tabs.iter().filter(|p| p.is_dir()).collect();
+        if tabs.is_empty() {
+            return false;
+        }
+        for path in &tabs {
+            self.hosts[side].open_tab((*path).clone());
+        }
+        self.hosts[side].select_tab(saved.active.min(tabs.len() - 1));
+        true
+    }
+
+    fn save_session(&self) {
+        let maximized = self.window.is_maximized();
+        let previous = Session::load(&Session::path()).unwrap_or_default();
+        let session = Session {
+            // Tiled Hyprland windows report as maximized; keep the last free size if we have one.
+            width: if maximized && previous.width > 0 {
+                previous.width
+            } else {
+                self.window.width()
+            },
+            height: if maximized && previous.height > 0 {
+                previous.height
+            } else {
+                self.window.height()
+            },
+            maximized,
+            split_position: self.split.position(),
+            active_side: self.active.get(),
+            left: SideSession {
+                tabs: self.hosts[0].tab_paths(),
+                active: self.hosts[0].current_index(),
+            },
+            right: SideSession {
+                tabs: self.hosts[1].tab_paths(),
+                active: self.hosts[1].current_index(),
+            },
+        };
+        if let Err(err) = session.save(&Session::path()) {
+            eprintln!("fcx: cannot save session: {err}");
+        }
+    }
+
+    // ---- settings ---------------------------------------------------------
+
+    /// Push the current settings into the live UI.
+    fn apply_settings(&self) {
+        let settings = self.settings.borrow();
+        self.menu_bar.set_visible(settings.show_menu_bar);
+        self.toolbar.set_visible(settings.show_toolbar);
+        self.places.widget().set_visible(settings.show_places_bar);
+        self.functions
+            .widget()
+            .set_visible(settings.show_functions_bar);
+    }
+
+    fn update_settings(&self, change: impl FnOnce(&mut Settings)) {
+        change(&mut self.settings.borrow_mut());
+        self.apply_settings();
+        if let Err(err) = self.settings.borrow().save(&Settings::path()) {
+            ops::alert(self.win(), "Cannot save settings", &err.to_string());
+        }
+    }
+
+    fn open_settings(&self) {
+        let weak = self.weak.clone();
+        let keymap_weak = self.weak.clone();
+        settings::show(
+            self.win(),
+            self.settings.borrow().clone(),
+            move |new| {
+                if let Some(app) = weak.upgrade() {
+                    app.update_settings(|s| *s = new.clone());
+                }
+            },
+            move || {
+                if let Some(app) = keymap_weak.upgrade() {
+                    app.edit_keymap();
+                }
+            },
+        );
+    }
+
+    /// Opens ~/.config/fcx/keymap.toml in the default text editor, seeding it
+    /// with the commented defaults on first use.
+    fn edit_keymap(&self) {
+        let path = fc_core::config::config_dir().join("keymap.toml");
+        if !path.exists() {
+            let seeded = fc_core::keymap::DEFAULT_KEYMAP_TOML.replace(
+                "[bindings]",
+                "# Every line below is the default; change or delete freely.\n[bindings]",
+            );
+            if let Err(err) = fs::create_dir_all(path.parent().unwrap_or(Path::new("/")))
+                .and_then(|_| fs::write(&path, seeded))
+            {
+                ops::alert(self.win(), "Cannot create keymap file", &err.to_string());
+                return;
+            }
+        }
+        let file = gio::File::for_path(&path);
+        let ctx = WidgetExt::display(&self.window).app_launch_context();
+        let result = match gio::AppInfo::default_for_type("text/plain", false) {
+            Some(app) => app.launch(&[file], Some(&ctx)).map_err(|e| e.to_string()),
+            None => Err("no default text editor is configured".to_owned()),
+        };
+        if let Err(err) = result {
+            ops::alert(self.win(), "Cannot open the keymap file", &err);
+        }
     }
 
     fn on_key(&self, key: gdk::Key, state: gdk::ModifierType) -> glib::Propagation {
@@ -367,10 +538,16 @@ impl App {
                     self.window.fullscreen();
                 }
             }
-            Action::ToggleMenuBar => toggle(&self.menu_bar),
-            Action::ToggleToolbar => toggle(&self.toolbar),
-            Action::TogglePlacesBar => toggle(self.places.widget()),
-            Action::ToggleFunctionsBar => toggle(self.functions.widget()),
+            Action::ToggleMenuBar => self.update_settings(|s| s.show_menu_bar = !s.show_menu_bar),
+            Action::ToggleToolbar => self.update_settings(|s| s.show_toolbar = !s.show_toolbar),
+            Action::TogglePlacesBar => {
+                self.update_settings(|s| s.show_places_bar = !s.show_places_bar)
+            }
+            Action::ToggleFunctionsBar => {
+                self.update_settings(|s| s.show_functions_bar = !s.show_functions_bar)
+            }
+            Action::Settings => self.open_settings(),
+            Action::EditKeymap => self.edit_keymap(),
             Action::ShowShortcuts => chrome::shortcuts_window(self.win(), &self.keymap),
             Action::Quit => self.window.close(),
         }
@@ -1024,10 +1201,11 @@ impl App {
         let Some(first) = paths.first() else {
             return;
         };
-        let op = forced.unwrap_or(if same_device(first, &dest) {
-            Operation::Move
-        } else {
-            Operation::Copy
+        let op = forced.unwrap_or(match self.settings.borrow().drag_default {
+            DragDefault::Copy => Operation::Copy,
+            DragDefault::Move => Operation::Move,
+            DragDefault::Auto if same_device(first, &dest) => Operation::Move,
+            DragDefault::Auto => Operation::Copy,
         });
         self.enqueue_transfer(op, paths, dest);
     }
@@ -1038,40 +1216,44 @@ impl App {
         };
         let what = ops::describe(&names);
         let weak = self.weak.clone();
+        let (confirm_trash, confirm_permanent) = {
+            let s = self.settings.borrow();
+            (s.confirm_trash, s.confirm_permanent_delete)
+        };
         if permanent {
-            ops::confirm(
-                self.win(),
-                &format!("Permanently delete {what}?"),
-                "This cannot be undone.",
-                "Delete",
-                move || {
-                    if let Some(app) = weak.upgrade() {
-                        app.runner
-                            .enqueue(format!("Delete {what}"), JobSpec::delete(paths));
-                        app.active_pane().mark_all(false);
-                    }
-                },
-            );
+            let title = format!("Permanently delete {what}?");
+            let go = move || {
+                if let Some(app) = weak.upgrade() {
+                    app.runner
+                        .enqueue(format!("Delete {what}"), JobSpec::delete(paths));
+                    app.active_pane().mark_all(false);
+                }
+            };
+            if confirm_permanent {
+                ops::confirm(self.win(), &title, "This cannot be undone.", "Delete", go);
+            } else {
+                go();
+            }
         } else {
-            ops::confirm(
-                self.win(),
-                &format!("Move {what} to the trash?"),
-                "",
-                "Move to Trash",
-                move || {
+            let title = format!("Move {what} to the trash?");
+            let go = move || {
+                let Some(app) = weak.upgrade() else {
+                    return;
+                };
+                app.active_pane().mark_all(false);
+                ops::trash(paths, move |failures| {
                     let Some(app) = weak.upgrade() else {
                         return;
                     };
-                    app.active_pane().mark_all(false);
-                    ops::trash(paths, move |failures| {
-                        let Some(app) = weak.upgrade() else {
-                            return;
-                        };
-                        app.reload_all();
-                        app.after_trash(failures);
-                    });
-                },
-            );
+                    app.reload_all();
+                    app.after_trash(failures);
+                });
+            };
+            if confirm_trash {
+                ops::confirm(self.win(), &title, "", "Move to Trash", go);
+            } else {
+                go();
+            }
         }
     }
 
@@ -1402,8 +1584,12 @@ enum PathText {
     Folder,
 }
 
-fn toggle(widget: &impl IsA<gtk::Widget>) {
-    widget.set_visible(!widget.is_visible());
+fn view_mode(kind: ViewKind) -> ViewMode {
+    match kind {
+        ViewKind::Details => ViewMode::Details,
+        ViewKind::List => ViewMode::List,
+        ViewKind::Thumbnails => ViewMode::Thumbnails,
+    }
 }
 
 fn which(program: &str) -> bool {
