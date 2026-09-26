@@ -1,5 +1,7 @@
 # fcx
 
+[![CI](https://github.com/ShaKy8/fcx/actions/workflows/ci.yml/badge.svg)](https://github.com/ShaKy8/fcx/actions/workflows/ci.yml)
+
 A FreeCommander-style dual-pane file manager for [Omarchy](https://omarchy.org)
 (Arch Linux, Hyprland, Wayland), written in Rust with GTK4. Keyboard first,
 with FreeCommander XE's default shortcuts so nothing has to be relearned.
