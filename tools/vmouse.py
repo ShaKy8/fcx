@@ -5,6 +5,7 @@ Usage:
   vmouse.py drag X1 Y1 X2 Y2 [--steps N] [--hold MS] [--mod ctrl|shift]
   vmouse.py click X Y [--button left|right|middle]
   vmouse.py move X Y
+  vmouse.py hold ctrl|shift|alt [--hold MS]   (press on a uinput keyboard, wait, release)
 
 Positions are Hyprland logical coordinates (what `hyprctl cursorpos` prints).
 Absolute positioning is done by moving relative to the cursor position that
@@ -29,7 +30,7 @@ EV_SYN, EV_KEY, EV_REL = 0x00, 0x01, 0x02
 SYN_REPORT = 0
 REL_X, REL_Y = 0x00, 0x01
 BTN_LEFT, BTN_RIGHT, BTN_MIDDLE = 0x110, 0x111, 0x112
-KEY_LEFTCTRL, KEY_LEFTSHIFT = 29, 42
+KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_LEFTALT = 29, 42, 56
 BUS_USB = 0x03
 
 
@@ -128,11 +129,22 @@ def main(argv):
             opts[args[i][2:]] = args[i + 1]
             i += 2
         else:
-            pos.append(int(args[i]))
+            if args[i].isdigit() or args[i].lstrip("-").isdigit():
+                pos.append(int(args[i]))
             i += 1
     steps, hold = int(opts["steps"]), int(opts["hold"]) / 1000
     btn = {"left": BTN_LEFT, "right": BTN_RIGHT, "middle": BTN_MIDDLE}[opts["button"]]
-    mod = {"ctrl": KEY_LEFTCTRL, "shift": KEY_LEFTSHIFT, None: None}[opts["mod"]]
+    mod = {"ctrl": KEY_LEFTCTRL, "shift": KEY_LEFTSHIFT, "alt": KEY_LEFTALT, None: None}[opts["mod"]]
+    if cmd == "hold":
+        kb = VKeyboard()
+        try:
+            kb.key({"ctrl": KEY_LEFTCTRL, "shift": KEY_LEFTSHIFT, "alt": KEY_LEFTALT}[args[0]], True)
+            time.sleep(hold)
+            kb.key({"ctrl": KEY_LEFTCTRL, "shift": KEY_LEFTSHIFT, "alt": KEY_LEFTALT}[args[0]], False)
+        finally:
+            time.sleep(0.2)
+            kb.close()
+        return 0
 
     m = VMouse()
     kb = VKeyboard() if mod else None
