@@ -69,6 +69,7 @@ pub fn show(
     let toolbar = check("Toolbar", current.show_toolbar);
     let places_bar = check("Places bar", current.show_places_bar);
     let functions_bar = check("Functions bar (F-keys)", current.show_functions_bar);
+    let permissions = check("Permissions column", current.show_permissions_column);
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -94,7 +95,13 @@ pub fn show(
     drag_row.append(&drag_default);
     content.append(&drag_row);
     content.append(&heading("Window"));
-    for c in [&menu_bar, &toolbar, &places_bar, &functions_bar] {
+    for c in [
+        &menu_bar,
+        &toolbar,
+        &places_bar,
+        &functions_bar,
+        &permissions,
+    ] {
         content.append(c);
     }
     content.append(&heading("Keys"));
@@ -138,6 +145,7 @@ pub fn show(
             places_bar.clone(),
             functions_bar.clone(),
         );
+        let permissions = permissions.clone();
         move || Settings {
             confirm_trash: confirm_trash.is_active(),
             confirm_permanent_delete: confirm_permanent.is_active(),
@@ -149,6 +157,7 @@ pub fn show(
             show_toolbar: toolbar.is_active(),
             show_places_bar: places_bar.is_active(),
             show_functions_bar: functions_bar.is_active(),
+            show_permissions_column: permissions.is_active(),
         }
     };
     let on_save = Rc::new(on_save);

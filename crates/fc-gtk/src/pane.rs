@@ -32,7 +32,8 @@ use crate::row::Row;
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(200);
 /// Quick search resets this long after the last typed character.
 const SEARCH_TIMEOUT: Duration = Duration::from_millis(1800);
-const THUMBNAIL_SIZE: i32 = 112;
+/// Freedesktop "normal" thumbnails are 128 px; the cache is shared with Nautilus.
+const THUMBNAIL_SIZE: i32 = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumn {
@@ -67,6 +68,7 @@ struct Columns {
     ext: gtk::ColumnViewColumn,
     size: gtk::ColumnViewColumn,
     modified: gtk::ColumnViewColumn,
+    permissions: gtk::ColumnViewColumn,
 }
 
 struct Inner {
@@ -184,7 +186,7 @@ impl Pane {
                         .then_with(|| by_name(a, b))
                 },
             );
-            add_column(
+            let permissions = add_column(
                 &view,
                 "Permissions",
                 false,
@@ -297,6 +299,7 @@ impl Pane {
                     ext,
                     size,
                     modified,
+                    permissions,
                 },
                 show_hidden,
                 view_mode,
@@ -679,6 +682,10 @@ impl Pane {
         if let Some(pos) = self.cursor() {
             self.activate(pos);
         }
+    }
+
+    pub fn set_permissions_column(&self, visible: bool) {
+        self.0.columns.permissions.set_visible(visible);
     }
 
     /// Sort by `column`; sorting by the current column again flips the direction.
@@ -1679,25 +1686,10 @@ fn grid_factory(weak: Weak<Inner>, mode: Rc<Cell<ViewMode>>) -> gtk::SignalListI
             icon,
             async move {
                 // Pixbuf isn't Send: decode on the worker, ship raw pixels back.
-                let decoded = gio::spawn_blocking(move || {
-                    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file_at_scale(
-                        &path,
-                        THUMBNAIL_SIZE,
-                        THUMBNAIL_SIZE,
-                        true,
-                    )
-                    .ok()?;
-                    Some((
-                        pixbuf.width(),
-                        pixbuf.height(),
-                        pixbuf.rowstride() as usize,
-                        pixbuf.has_alpha(),
-                        pixbuf.read_pixel_bytes(),
-                    ))
-                })
-                .await
-                .ok()
-                .flatten();
+                let decoded = gio::spawn_blocking(move || load_thumbnail(&path))
+                    .await
+                    .ok()
+                    .flatten();
                 let Some((width, height, stride, has_alpha, bytes)) = decoded else {
                     return;
                 };
@@ -1885,4 +1877,58 @@ fn build_favorites(weak: Weak<Inner>) -> (gtk::ScrolledWindow, gio::ListStore) {
         .hscrollbar_policy(gtk::PolicyType::Never)
         .build();
     (scroller, store)
+}
+
+/// Thumbnail pixels for an image, via the freedesktop cache
+/// (`~/.cache/thumbnails/normal/<md5 of uri>.png`, validated by `Thumb::MTime`).
+/// A miss decodes the image scaled down and writes the cache entry atomically,
+/// so Nautilus and other apps benefit too. Runs on a worker thread.
+fn load_thumbnail(path: &Path) -> Option<(i32, i32, usize, bool, glib::Bytes)> {
+    use fc_core::thumbs::{Size, cache_path};
+    use gtk::gdk_pixbuf::Pixbuf;
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        .to_string();
+    let uri = gio::File::for_path(path).uri();
+    let cache = cache_path(&uri, Size::Normal);
+    let cached = Pixbuf::from_file(&cache)
+        .ok()
+        .filter(|p| p.option("tEXt::Thumb::MTime").as_deref() == Some(mtime.as_str()));
+    let pixbuf = match cached {
+        Some(p) => p,
+        None => {
+            let p = Pixbuf::from_file_at_scale(path, THUMBNAIL_SIZE, THUMBNAIL_SIZE, true).ok()?;
+            if let Some(dir) = cache.parent() {
+                let _ = std::fs::create_dir_all(dir);
+                let tmp = dir.join(format!(
+                    ".{}-{}.tmp",
+                    cache.file_name()?.to_string_lossy(),
+                    std::process::id()
+                ));
+                let options = [
+                    ("tEXt::Thumb::URI", uri.as_str()),
+                    ("tEXt::Thumb::MTime", mtime.as_str()),
+                    ("tEXt::Software", "fcx"),
+                ];
+                if p.savev(&tmp, "png", &options).is_ok() {
+                    let _ = std::fs::rename(&tmp, &cache);
+                } else {
+                    let _ = std::fs::remove_file(&tmp);
+                }
+            }
+            p
+        }
+    };
+    Some((
+        pixbuf.width(),
+        pixbuf.height(),
+        pixbuf.rowstride() as usize,
+        pixbuf.has_alpha(),
+        pixbuf.read_pixel_bytes(),
+    ))
 }

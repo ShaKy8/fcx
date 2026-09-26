@@ -123,6 +123,7 @@ actions! {
     ToggleToolbar => "toggle-toolbar", "Toolbar";
     TogglePlacesBar => "toggle-places-bar", "Places bar";
     ToggleFunctionsBar => "toggle-functions-bar", "Functions bar";
+    TogglePermissionsColumn => "toggle-permissions-column", "Permissions column";
     // app
     Settings => "settings", "Settings…";
     EditKeymap => "edit-keymap", "Edit key bindings…";

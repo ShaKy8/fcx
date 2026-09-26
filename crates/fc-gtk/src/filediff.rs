@@ -70,6 +70,7 @@ pub fn show(parent: &gtk::Window, left: PathBuf, right: PathBuf) {
         .default_width(960)
         .default_height(700)
         .build();
+    crate::ops::fit(&window, parent, 960, 700);
     let view = gtk::TextView::builder()
         .editable(false)
         .cursor_visible(false)

@@ -22,6 +22,7 @@ pub fn show(parent: &gtk::Window, dir: PathBuf, files: Vec<PathBuf>) {
         .default_width(820)
         .default_height(480)
         .build();
+    crate::ops::fit(&window, parent, 820, 480);
 
     let algorithm = gtk::DropDown::from_strings(&Algorithm::ALL.map(Algorithm::label));
     let store = gio::ListStore::new::<glib::BoxedAnyObject>();

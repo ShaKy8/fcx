@@ -110,11 +110,12 @@ pub fn show(
         .default_width(960)
         .default_height(680)
         .build();
+    crate::ops::fit(&window, parent, 960, 680);
 
     let fields = Rc::new(Fields {
         root: gtk::Entry::builder()
             .text(start_dir.to_string_lossy())
-            .width_chars(16)
+            .width_chars(12)
             .hexpand(true)
             .build(),
         subfolders: gtk::CheckButton::builder()
@@ -123,13 +124,13 @@ pub fn show(
             .build(),
         name: gtk::Entry::builder()
             .placeholder_text("*.jpg; *.png  (empty = all)")
-            .width_chars(16)
+            .width_chars(12)
             .hexpand(true)
             .build(),
         kind: gtk::DropDown::from_strings(&KINDS.map(|(l, _)| l)),
         content: gtk::Entry::builder()
             .placeholder_text("text the file must contain")
-            .width_chars(16)
+            .width_chars(12)
             .hexpand(true)
             .build(),
         regex: gtk::CheckButton::with_label("Regular expression"),
@@ -143,11 +144,11 @@ pub fn show(
             .placeholder_text("2M")
             .build(),
         date_from: gtk::Entry::builder()
-            .width_chars(10)
+            .width_chars(9)
             .placeholder_text("YYYY-MM-DD")
             .build(),
         date_to: gtk::Entry::builder()
-            .width_chars(10)
+            .width_chars(9)
             .placeholder_text("YYYY-MM-DD")
             .build(),
         hidden: gtk::CheckButton::with_label("Include hidden"),
@@ -168,6 +169,7 @@ pub fn show(
     let content_opts = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     content_opts.append(&fields.regex);
     content_opts.append(&fields.case_sensitive);
+    content_opts.append(&fields.hidden);
     grid.attach(&content_opts, 2, 2, 2, 1);
     let ranges = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     ranges.set_hexpand(true);
@@ -178,7 +180,6 @@ pub fn show(
     ranges.append(&fields.date_from);
     ranges.append(&gtk::Label::new(Some("to")));
     ranges.append(&fields.date_to);
-    ranges.append(&fields.hidden);
     let size_label = gtk::Label::builder().label("Size").xalign(1.0).build();
     size_label.add_css_class("dim-label");
     grid.attach(&size_label, 0, 3, 1, 1);

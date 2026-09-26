@@ -152,6 +152,7 @@ impl App {
                         pane.set_show_hidden(settings.show_hidden);
                         pane.set_view_mode(view_mode(settings.default_view));
                         pane.set_favorites(app.favorite_items());
+                        pane.set_permissions_column(settings.show_permissions_column);
                     }
                     let w = weak.clone();
                     pane.connect_activate_file(move |path| {
@@ -557,6 +558,9 @@ impl App {
             }
             Action::ToggleFunctionsBar => {
                 self.update_settings(|s| s.show_functions_bar = !s.show_functions_bar)
+            }
+            Action::TogglePermissionsColumn => {
+                self.update_settings(|s| s.show_permissions_column = !s.show_permissions_column)
             }
             Action::Settings => self.open_settings(),
             Action::EditKeymap => self.edit_keymap(),

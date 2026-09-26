@@ -44,6 +44,15 @@ Omarchy renders the template on every theme switch to
 it immediately without switching themes, re-apply the current theme
 (`omarchy-theme-set "$(cat ~/.local/state/omarchy/current/theme.name)"`).
 
+### Dialogs on Hyprland
+
+Secondary windows (search, synchronize, viewer…) are sized to fit inside the
+main window. To centre them on the monitor instead, add to your Hyprland config:
+
+```
+windowrule = center, class:^(fcx)$, floating:1
+```
+
 ### Super+Shift+F
 
 Append to `~/.config/hypr/bindings.lua`:

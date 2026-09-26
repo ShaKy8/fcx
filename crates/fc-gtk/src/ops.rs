@@ -26,6 +26,20 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(40);
 
 // ---- simple dialogs ---------------------------------------------------------
 
+/// Size a secondary window so it fits inside its parent: Wayland compositors
+/// centre transients on the parent, so a dialog wider than a half-screen tile
+/// would hang off the edge of the monitor.
+pub fn fit(window: &gtk::Window, parent: &gtk::Window, width: i32, height: i32) {
+    let (pw, ph) = (parent.width(), parent.height());
+    let w = if pw > 200 { width.min(pw - 24) } else { width };
+    let h = if ph > 200 {
+        height.min(ph - 24)
+    } else {
+        height
+    };
+    window.set_default_size(w, h);
+}
+
 /// Modal one-line text prompt. `select` picks the initially selected text range
 /// (e.g. a filename without its extension); `on_ok` receives the trimmed text.
 pub fn prompt(

@@ -126,6 +126,7 @@ const MENUS: &[(&str, &[&[Action]])] = &[
                 Action::ToggleToolbar,
                 Action::TogglePlacesBar,
                 Action::ToggleFunctionsBar,
+                Action::TogglePermissionsColumn,
             ],
         ],
     ),

@@ -86,15 +86,16 @@ pub fn show(
         .default_width(1000)
         .default_height(680)
         .build();
+    crate::ops::fit(&window, parent, 1000, 680);
 
     let left_entry = gtk::Entry::builder()
         .text(left.to_string_lossy())
-        .width_chars(16)
+        .width_chars(12)
         .hexpand(true)
         .build();
     let right_entry = gtk::Entry::builder()
         .text(right.to_string_lossy())
-        .width_chars(16)
+        .width_chars(12)
         .hexpand(true)
         .build();
     let recursive = gtk::CheckButton::builder()
@@ -120,18 +121,32 @@ pub fn show(
         .build();
     labelled(&grid, 0, 0, "Left", &left_entry);
     labelled(&grid, 0, 1, "Right", &right_entry);
-    let options = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    options.append(&recursive);
-    options.append(&hidden);
-    options.append(&gtk::Label::new(Some("Compare by")));
-    options.append(&method);
-    options.append(&show_same);
+    // A wrapping row, so the dialog can be as narrow as a half-screen tile.
+    let options = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .column_spacing(12)
+        .row_spacing(6)
+        .max_children_per_line(6)
+        .build();
+    let method_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    method_box.append(&gtk::Label::new(Some("Compare by")));
+    method_box.append(&method);
+    let direction_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    direction_box.append(&gtk::Label::new(Some("Direction")));
+    direction_box.append(&direction);
+    for w in [
+        recursive.upcast_ref::<gtk::Widget>(),
+        hidden.upcast_ref(),
+        method_box.upcast_ref(),
+        show_same.upcast_ref(),
+        direction_box.upcast_ref(),
+        delete_extra.upcast_ref(),
+    ] {
+        let child = gtk::FlowBoxChild::builder().child(w).build();
+        child.set_can_focus(false);
+        options.append(&child);
+    }
     grid.attach(&options, 1, 2, 1, 1);
-    let sync_opts = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    sync_opts.append(&gtk::Label::new(Some("Direction")));
-    sync_opts.append(&direction);
-    sync_opts.append(&delete_extra);
-    grid.attach(&sync_opts, 1, 3, 1, 1);
 
     // ---- preview ---------------------------------------------------------------
     let store = gio::ListStore::new::<glib::BoxedAnyObject>();

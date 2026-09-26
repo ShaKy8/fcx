@@ -84,6 +84,7 @@ pub fn show(
         .default_width(900)
         .default_height(620)
         .build();
+    crate::ops::fit(&window, parent, 900, 620);
 
     let controls = Rc::new(Controls {
         name_mask: gtk::Entry::builder().text("[N]").hexpand(true).build(),

@@ -465,6 +465,7 @@ pub fn window(parent: &gtk::Window, path: PathBuf) {
         .default_height(700)
         .child(viewer.widget())
         .build();
+    crate::ops::fit(&window, parent, 900, 700);
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed(glib::clone!(

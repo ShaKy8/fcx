@@ -40,6 +40,7 @@ pub struct Settings {
     pub show_toolbar: bool,
     pub show_places_bar: bool,
     pub show_functions_bar: bool,
+    pub show_permissions_column: bool,
 }
 
 impl Default for Settings {
@@ -55,6 +56,7 @@ impl Default for Settings {
             show_toolbar: true,
             show_places_bar: true,
             show_functions_bar: true,
+            show_permissions_column: false,
         }
     }
 }
