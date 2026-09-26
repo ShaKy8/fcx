@@ -1045,13 +1045,40 @@ impl Pane {
                 let (Some(handler), false) = (handler, paths.is_empty()) else {
                     return false;
                 };
-                let state = target.current_event_state();
-                let forced = if state.contains(gdk::ModifierType::CONTROL_MASK) {
-                    Some(Operation::Copy)
-                } else if state.contains(gdk::ModifierType::SHIFT_MASK) {
-                    Some(Operation::Move)
-                } else {
-                    None
+                // On Wayland the compositor picks the DnD action and Hyprland ignores
+                // modifier keys, so the drop event carries no modifier state. The
+                // keyboard device does: the drag source is this same window, so it
+                // still receives modifier updates. Fall back to a narrowed offer
+                // (compositors that do honour modifiers) before the seat state.
+                let offered = target
+                    .current_drop()
+                    .map(|d| d.actions())
+                    .unwrap_or(gdk::DragAction::COPY | gdk::DragAction::MOVE);
+                let keyboard_mods = target
+                    .widget()
+                    .and_then(|w| w.display().default_seat())
+                    .and_then(|seat| seat.keyboard())
+                    .map(|kb| kb.modifier_state())
+                    .unwrap_or(gdk::ModifierType::empty());
+                if std::env::var_os("FCX_DEBUG_DND").is_some() {
+                    eprintln!(
+                        "drop: offered={offered:?} event_state={:?} keyboard={keyboard_mods:?}",
+                        target.current_event_state()
+                    );
+                }
+                let forced = match (
+                    offered.contains(gdk::DragAction::COPY),
+                    offered.contains(gdk::DragAction::MOVE),
+                ) {
+                    (true, false) => Some(Operation::Copy),
+                    (false, true) => Some(Operation::Move),
+                    _ if keyboard_mods.contains(gdk::ModifierType::CONTROL_MASK) => {
+                        Some(Operation::Copy)
+                    }
+                    _ if keyboard_mods.contains(gdk::ModifierType::SHIFT_MASK) => {
+                        Some(Operation::Move)
+                    }
+                    _ => None,
                 };
                 handler(paths, forced);
                 true
@@ -1455,7 +1482,18 @@ fn attach_cell_gestures(weak: Weak<Inner>, item: &gtk::ListItem, widget: &impl I
     source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
     let drag_item = item.clone();
     let drag_weak = weak.clone();
-    source.connect_prepare(move |_, _, _| {
+    source.connect_prepare(move |source, _, _| {
+        // Hyprland takes keyboard focus away once a drag is under way, so the
+        // only modifier state we can trust is the one on the press that starts
+        // it: Ctrl offers copy only, Shift move only, neither leaves both.
+        let state = source.current_event_state();
+        source.set_actions(if state.contains(gdk::ModifierType::CONTROL_MASK) {
+            gdk::DragAction::COPY
+        } else if state.contains(gdk::ModifierType::SHIFT_MASK) {
+            gdk::DragAction::MOVE
+        } else {
+            gdk::DragAction::COPY | gdk::DragAction::MOVE
+        });
         let pane = Pane::upgrade(&drag_weak)?;
         let obj = drag_item.item()?;
         let row = row_of(&obj);

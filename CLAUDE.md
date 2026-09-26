@@ -33,6 +33,7 @@ hyprctl dispatch focuswindow class:org.omarchy.fcx
 wtype -k F5; wtype -M alt -k Return -m alt      # keys and chords
 G=$(hyprctl clients -j | jq -r '.[] | select(.class=="org.omarchy.fcx") | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"'); grim -g "$G" shot.png
 ```
+Pointer input (drag-and-drop, clicks): `tools/vmouse.py` creates uinput mouse/keyboard devices — `tools/vmouse.py drag X1 Y1 X2 Y2 [--mod ctrl|shift]`, `click X Y`, `move X Y` in Hyprland logical coordinates (screenshot px ÷ monitor scale + window `at`). It needs `sudo setfacl -m u:$USER:rw /dev/uinput` once per boot (ask the user). Use `--mod`, not `wtype`, for held modifiers: wtype's virtual keyboard is not reflected in pointer-event modifier state. `FCX_DEBUG_DND=1` prints what each drop saw. Hyprland removes keyboard focus during a drag, so Ctrl/Shift are read on the press that starts it (`DragSource::prepare`). Beware the `Paned` divider: measure it from a screenshot before targeting right-pane rows.
 Caveats: a virtual *lone* Ctrl press is rewritten to Escape by this machine's keyboard remapper (Ctrl+key combos are fine); `grim` hangs while the screen is locked; set `XDG_CONFIG_HOME` (and `XDG_CACHE_HOME` for archives) to a scratch dir so tests don't touch `~/.config/fcx/`; `FCX_THEME_CSS=path` loads a rendered theme CSS for testing; `/tmp` is tmpfs, where GIO cannot trash (the app offers permanent delete instead).
 
 ## Filesystem invariants
