@@ -37,7 +37,7 @@ const CSS: &str = "
 .toolbar, .places-bar { padding: 2px 4px; border-bottom: 1px solid alpha(currentColor, 0.15); }
 .toolbar separator { margin: 4px 3px; }
 .functions-bar { border-top: 1px solid alpha(currentColor, 0.2); padding: 1px; }
-.functions-bar button { padding: 2px 6px; min-height: 0; }
+.functions-bar button { padding: 2px 4px; min-height: 0; min-width: 0; }
 .file-grid { padding: 4px; }
 .file-grid.thumbnails > child { padding: 6px; }
 .folder-tree { font-size: 0.95em; }

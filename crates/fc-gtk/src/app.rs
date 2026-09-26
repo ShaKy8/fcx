@@ -55,7 +55,7 @@ pub struct App {
     /// While the quick view replaces the inactive side, which side it replaced.
     quick_view_side: Cell<Option<usize>>,
     menu_bar: gtk::PopoverMenuBar,
-    toolbar: gtk::Box,
+    toolbar: gtk::Widget,
     places: Rc<PlacesBar>,
     functions: Rc<FunctionsBar>,
 }

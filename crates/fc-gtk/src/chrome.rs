@@ -281,7 +281,9 @@ pub fn menu_bar() -> (gtk::PopoverMenuBar, gio::Menu) {
 
 // ---- toolbar -------------------------------------------------------------------
 
-pub fn toolbar(keymap: &Keymap, run: Run) -> gtk::Box {
+/// Icon toolbar. Wrapped in a scroller (hidden scrollbar) so a narrow tile
+/// clips the toolbar rather than forcing the whole window wider.
+pub fn toolbar(keymap: &Keymap, run: Run) -> gtk::Widget {
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     bar.add_css_class("toolbar");
     for (i, group) in TOOLBAR.iter().enumerate() {
@@ -300,7 +302,17 @@ pub fn toolbar(keymap: &Keymap, run: Run) -> gtk::Box {
             bar.append(&button);
         }
     }
-    bar
+    shrinkable(&bar)
+}
+
+/// Lets a horizontal bar be narrower than its contents (clipped, no scrollbar).
+fn shrinkable(bar: &impl IsA<gtk::Widget>) -> gtk::Widget {
+    gtk::ScrolledWindow::builder()
+        .child(bar)
+        .hscrollbar_policy(gtk::PolicyType::External)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .build()
+        .upcast()
 }
 
 // ---- functions bar ---------------------------------------------------------------
@@ -318,7 +330,7 @@ impl FunctionsBar {
     pub fn new(keymap: Keymap, run: Run) -> Rc<Self> {
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .homogeneous(true)
+            .homogeneous(false)
             .build();
         root.add_css_class("functions-bar");
         let buttons: Vec<gtk::Button> = (1..=12)
@@ -379,10 +391,13 @@ impl FunctionsBar {
                     let text = glib::markup_escape_text(action.label().trim_end_matches('…'));
                     label.set_markup(&format!("<b>{key}</b> {text}"));
                     button.set_sensitive(true);
+                    button.set_hexpand(true);
                 }
                 None => {
                     label.set_markup(&format!("<b>{key}</b>"));
                     button.set_sensitive(false);
+                    // Unbound keys keep only their natural width so bound ones can show their names.
+                    button.set_hexpand(false);
                 }
             }
         }
@@ -394,7 +409,8 @@ impl FunctionsBar {
 /// Home, root, and every mounted or mountable volume GIO knows about, as buttons.
 /// Right-click a mount to unmount or eject it.
 pub struct PlacesBar {
-    root: gtk::Box,
+    root: gtk::Widget,
+    bar: gtk::Box,
     monitor: gio::VolumeMonitor,
     open: Rc<dyn Fn(PathBuf)>,
     window: gtk::Window,
@@ -402,10 +418,11 @@ pub struct PlacesBar {
 
 impl PlacesBar {
     pub fn new(window: &gtk::Window, open: impl Fn(PathBuf) + 'static) -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        root.add_css_class("places-bar");
+        let inner = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        inner.add_css_class("places-bar");
         let bar = Rc::new(PlacesBar {
-            root,
+            root: shrinkable(&inner),
+            bar: inner,
             monitor: gio::VolumeMonitor::get(),
             open: Rc::new(open),
             window: window.clone(),
@@ -448,12 +465,12 @@ impl PlacesBar {
     }
 
     pub fn widget(&self) -> &gtk::Widget {
-        self.root.upcast_ref()
+        &self.root
     }
 
     fn rebuild(&self) {
-        while let Some(child) = self.root.first_child() {
-            self.root.remove(&child);
+        while let Some(child) = self.bar.first_child() {
+            self.bar.remove(&child);
         }
         self.add_place("Home", "user-home-symbolic", glib::home_dir(), None);
         self.add_place("/", "drive-harddisk-symbolic", PathBuf::from("/"), None);
@@ -504,7 +521,7 @@ impl PlacesBar {
         button.add_css_class("flat");
         let open = self.open.clone();
         button.connect_clicked(move |_| open(path.clone()));
-        self.root.append(&button);
+        self.bar.append(&button);
         button
     }
 
@@ -541,7 +558,7 @@ impl PlacesBar {
                 ),
             );
         });
-        self.root.append(&button);
+        self.bar.append(&button);
     }
 
     fn attach_eject_menu(&self, button: &gtk::Button, mount: gio::Mount) {
