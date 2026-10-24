@@ -332,7 +332,18 @@ pub fn show(
     buttons.append(&close);
     buttons.append(&apply);
     content.append(&buttons);
-    window.set_child(Some(&content));
+    // The wrapping value labels report their minimum height at their narrowest
+    // width (more lines), which is taller than the dialog's real height. GTK then
+    // warns "Trying to measure GtkWindow for height of …" and redoes the size
+    // computation on every frame. A scroller keeps the natural size but reports a
+    // small minimum; it only scrolls if the screen is too short for the dialog.
+    let scroller = gtk::ScrolledWindow::builder()
+        .child(&content)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_width(true)
+        .propagate_natural_height(true)
+        .build();
+    window.set_child(Some(&scroller));
 
     close.connect_clicked(glib::clone!(
         #[weak]
