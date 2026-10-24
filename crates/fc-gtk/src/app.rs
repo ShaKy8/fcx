@@ -703,13 +703,20 @@ impl App {
         let popover = gtk::PopoverMenu::from_model(Some(&menu));
         popover.set_parent(anchor);
         popover.set_has_arrow(false);
+        // Open to the right of the point like a desktop context menu. The default
+        // centers the popover on it, which pushes half of it past the left window
+        // edge when the point is near there (Shift+F10 anchors at the view's corner).
+        popover.set_halign(gtk::Align::Start);
         popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
         popover.connect_closed(|popover| {
             // Unparent once the popover is done, outside the signal emission.
             let popover = popover.clone();
             glib::idle_add_local_once(move || popover.unparent());
         });
-        popover.popup();
+        // GtkMenuSectionBox adds the section separators from an idle callback, so a
+        // popover shown right away is sized without them and its last rows end up
+        // behind a scrollbar. Show it once the separators exist.
+        glib::idle_add_local_once(move || popover.popup());
     }
 
     fn open_with(&self) {
