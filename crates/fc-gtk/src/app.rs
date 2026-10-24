@@ -467,6 +467,7 @@ impl App {
             Action::EditFavorites => self.edit_favorites(),
             Action::FavoritesMenu => favorites::popup(&pane.view_widget(), &self.favorites_menu),
             Action::OpenTerminal => self.open_terminal(),
+            Action::ScanThreats => self.scan_threats(),
             Action::Search => self.search(),
             Action::OpenArchive => {
                 if let Some(path) = pane.cursor_path()
@@ -689,7 +690,7 @@ impl App {
                 Action::NewFolder,
                 Action::OpenTerminal,
             ],
-            &[Action::Properties],
+            &[Action::ScanThreats, Action::Properties],
         ];
         let menu = gio::Menu::new();
         for section in sections {
@@ -1172,6 +1173,32 @@ impl App {
         };
         if let Err(err) = command.current_dir(&cwd).spawn() {
             ops::alert(self.win(), "Cannot open a terminal", &err.to_string());
+        }
+    }
+
+    /// Scans the targets (or the current folder when nothing is selected) with
+    /// avscan, which shows its report in a floating terminal.
+    fn scan_threats(&self) {
+        let pane = self.active_pane();
+        let Some(cwd) = pane.cwd() else {
+            return;
+        };
+        if !which("avscan-scan-gui") {
+            ops::alert(
+                self.win(),
+                "Cannot scan for threats",
+                "avscan-scan-gui was not found on PATH. Install avscan first.",
+            );
+            return;
+        }
+        let mut paths: Vec<PathBuf> = pane.targets().iter().map(|n| cwd.join(n)).collect();
+        if paths.is_empty() {
+            paths.push(cwd.clone());
+        }
+        let mut command = Command::new("avscan-scan-gui");
+        command.args(&paths);
+        if let Err(err) = command.current_dir(&cwd).spawn() {
+            ops::alert(self.win(), "Cannot scan for threats", &err.to_string());
         }
     }
 

@@ -38,6 +38,7 @@ actions! {
     SameFolderBoth => "same-folder-both", "Same folder in both panes";
     SwapPanes => "swap-panes", "Swap panes";
     OpenTerminal => "open-terminal", "Open terminal here";
+    ScanThreats => "scan-threats", "Scan for threats";
     Search => "search", "Search…";
     OpenArchive => "open-archive", "Open archive";
     Extract => "extract", "Unpack archive…";

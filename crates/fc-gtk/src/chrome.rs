@@ -133,7 +133,7 @@ const MENUS: &[(&str, &[&[Action]])] = &[
     (
         "_Tools",
         &[
-            &[Action::Search, Action::OpenTerminal],
+            &[Action::Search, Action::OpenTerminal, Action::ScanThreats],
             &[Action::Settings, Action::EditKeymap],
         ],
     ),
