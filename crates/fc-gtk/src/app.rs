@@ -109,7 +109,7 @@ impl App {
                     }
                 })
             };
-            chrome::register_actions(gtk_app, &keymap, run.clone());
+            chrome::register_actions(gtk_app, &window, &keymap, run.clone());
             let places = {
                 let weak = weak.clone();
                 PlacesBar::new(window.upcast_ref(), move |path| {
@@ -213,7 +213,7 @@ impl App {
                 app.active_pane().navigate(PathBuf::from(path), None);
             }
         });
-        gtk_app.add_action(&open_favorite);
+        app.window.add_action(&open_favorite);
         app.load_favorites();
 
         let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -696,7 +696,7 @@ impl App {
         for section in sections {
             let items = gio::Menu::new();
             for action in section.iter() {
-                items.append(Some(action.label()), Some(&format!("app.{}", action.id())));
+                items.append(Some(action.label()), Some(&format!("win.{}", action.id())));
             }
             menu.append_section(None, &items);
         }
@@ -996,7 +996,7 @@ impl App {
             let item = gio::MenuItem::new(Some(&path.to_string_lossy()), None);
             let target = path.to_string_lossy().to_variant();
             item.set_action_and_target_value(
-                Some(&format!("app.{}", favorites::OPEN_ACTION)),
+                Some(&format!("win.{}", favorites::OPEN_ACTION)),
                 Some(&target),
             );
             menu.append_item(&item);

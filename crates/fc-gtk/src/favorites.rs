@@ -10,7 +10,7 @@ use gtk::{gdk, gio, glib};
 
 use crate::ops;
 
-/// GAction that opens a favorite; the target is the folder path.
+/// Window GAction (`win.open-favorite`) that opens a favorite; the target is the folder path.
 pub const OPEN_ACTION: &str = "open-favorite";
 
 /// Rebuilds `menu` from `favorites` and (re)binds Shift+Ctrl+1…0 to the first ten.
@@ -19,7 +19,7 @@ pub fn refresh_menu(gtk_app: &gtk::Application, menu: &gio::Menu, favorites: &Fa
     for (i, fav) in favorites.items.iter().enumerate() {
         let item = gio::MenuItem::new(Some(&fav.name), None);
         let target = fav.path.to_string_lossy().to_variant();
-        item.set_action_and_target_value(Some(&format!("app.{OPEN_ACTION}")), Some(&target));
+        item.set_action_and_target_value(Some(&format!("win.{OPEN_ACTION}")), Some(&target));
         menu.append_item(&item);
         let detailed = gio::Action::print_detailed_name(OPEN_ACTION, Some(&target));
         let accels: Vec<String> = match i {
@@ -28,7 +28,7 @@ pub fn refresh_menu(gtk_app: &gtk::Application, menu: &gio::Menu, favorites: &Fa
             _ => Vec::new(),
         };
         let refs: Vec<&str> = accels.iter().map(String::as_str).collect();
-        gtk_app.set_accels_for_action(&format!("app.{detailed}"), &refs);
+        gtk_app.set_accels_for_action(&format!("win.{detailed}"), &refs);
     }
     if favorites.items.is_empty() {
         let item = gio::MenuItem::new(

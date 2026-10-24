@@ -230,21 +230,29 @@ fn tooltip(keymap: &Keymap, action: Action) -> String {
 
 // ---- GActions + menu bar -------------------------------------------------------
 
-/// Registers `app.<id>` for every action and its accelerators, so the menu bar
-/// shows shortcuts and menu items dispatch through `run`.
-pub fn register_actions(gtk_app: &gtk::Application, keymap: &Keymap, run: Run) {
+/// Registers `win.<id>` on `window` for every action, plus its accelerators, so the
+/// menu bar shows shortcuts and menu items dispatch through this window's `run`.
+/// Window-scoped because each window is its own `App`: `app.*` actions would be
+/// re-registered by every new window, and menus in older windows would then act
+/// on the newest one.
+pub fn register_actions(
+    gtk_app: &gtk::Application,
+    window: &gtk::ApplicationWindow,
+    keymap: &Keymap,
+    run: Run,
+) {
     for &action in Action::ALL {
         let simple = gio::SimpleAction::new(action.id(), None);
         let run = run.clone();
         simple.connect_activate(move |_, _| run(action));
-        gtk_app.add_action(&simple);
+        window.add_action(&simple);
         let accels: Vec<String> = keymap
             .chords_for(action)
             .iter()
             .filter_map(|c| accel_for(c))
             .collect();
         let refs: Vec<&str> = accels.iter().map(String::as_str).collect();
-        gtk_app.set_accels_for_action(&format!("app.{}", action.id()), &refs);
+        gtk_app.set_accels_for_action(&format!("win.{}", action.id()), &refs);
     }
 }
 
@@ -257,7 +265,7 @@ pub fn menu_bar() -> (gtk::PopoverMenuBar, gio::Menu) {
         for section in sections.iter() {
             let items = gio::Menu::new();
             for action in section.iter() {
-                items.append(Some(action.label()), Some(&format!("app.{}", action.id())));
+                items.append(Some(action.label()), Some(&format!("win.{}", action.id())));
             }
             menu.append_section(None, &items);
         }
@@ -267,7 +275,7 @@ pub fn menu_bar() -> (gtk::PopoverMenuBar, gio::Menu) {
             let fav = gio::Menu::new();
             let fixed = gio::Menu::new();
             for action in [Action::AddFavorite, Action::EditFavorites] {
-                fixed.append(Some(action.label()), Some(&format!("app.{}", action.id())));
+                fixed.append(Some(action.label()), Some(&format!("win.{}", action.id())));
             }
             fav.append_section(None, &fixed);
             fav.append_section(None, &favorites_section);
